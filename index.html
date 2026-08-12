@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>TEST HASH+VOICE</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; background-color: #111;
+            font-family: sans-serif;
+        }
+
+        /* 呼吸紅燈效果 */
+        @keyframes breathingRed {
+            0% { background-color: rgba(255, 0, 0, 0.2); }
+            50% { background-color: rgba(255, 0, 0, 0.9); }
+            100% { background-color: rgba(255, 0, 0, 0.2); }
+        }
+        .breathing-red {
+            animation: breathingRed 1.5s infinite ease-in-out;
+        }
+
+        /* 蒂芬妮綠護盾樣式 (#81D8D0) */
+        #shield-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            border: 20px solid #81D8D0;
+            box-shadow: inset 0 0 50px #81D8D0, 0 0 30px #81D8D0;
+            pointer-events: none; opacity: 0; transition: opacity 0.3s;
+        }
+        .shield-active { opacity: 1 !important; }
+
+        /* Canvas 圖騰動畫層 */
+        canvas {
+            position: absolute; top: 0; left: 0; z-index: 10; pointer-events: none;
+        }
+
+        #video-preview {
+            position: absolute; width: 240px; height: 180px;
+            bottom: 10px; right: 10px; border: 2px solid #555; transform: scaleX(-1);
+        }
+        
+        #ui-info {
+            position: absolute; top: 20px; left: 20px; color: #fff; z-index: 20;
+            text-shadow: 0 0 5px #000;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="shield-layer"></div>
+    <canvas id="stageCanvas"></canvas>
+    <video id="video-preview" autoplay playsinline></video>
+
+    <div id="ui-info">
+        <h1>專案：TEST HASH+VOICE</h1>
+        <p>狀態：<span id="status">等待語音/光訊號輸入...</span></p>
+        <button onclick="simulateHashDetect()">[測試] 模擬偵測到 HASH 脈衝</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('stageCanvas');
+        const ctx = canvas.getContext('2d');
+        const shield = document.getElementById('shield-layer');
+        const statusText = document.getElementById('status');
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // ----------------------------------------------------
+        // 1. 光通訊觸發：呼吸紅燈 (5秒後自動復原)
+        // ----------------------------------------------------
+        function triggerRedBreathing() {
+            statusText.innerText = "偵測到 HASH 16碼光通訊脈衝！啟用呼吸紅色螢幕";
+            document.body.classList.add('breathing-red');
+            
+            setTimeout(() => {
+                document.body.classList.remove('breathing-red');
+                statusText.innerText = "螢幕已復原，等待中...";
+            }, 5000);
+        }
+
+        function simulateHashDetect() {
+            triggerRedBreathing();
+        }
+
+        // ----------------------------------------------------
+        // 2. 語音控制：asclepius 護盾與飛入圖騰 (5秒後復原)
+        // ----------------------------------------------------
+        let totemAnimation = null;
+
+        function triggerAsclepiusEffect() {
+            statusText.innerText = "語音辨識成功：asclepius！護盾展開";
+            shield.classList.add('shield-active');
+
+            // 啟動圖騰動畫
+            startTotemAnimation();
+
+            // 5秒後復原
+            setTimeout(() => {
+                shield.classList.remove('shield-active');
+                statusText.innerText = "螢幕已復原，等待中...";
+            }, 5000);
+        }
+
+        // 半透明發光 Asclepius 圖騰飛入動畫
+        function startTotemAnimation() {
+            let startY = canvas.height + 100;
+            let targetY = canvas.height / 2;
+            let currentY = startY;
+            let state = 'ENTER'; // ENTER, HOLD, EXIT, DONE
+            let holdStartTime = 0;
+
+            function drawStaff(x, y, alpha) {
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.globalAlpha = alpha;
+                ctx.strokeStyle = '#81D8D0';
+                ctx.fillStyle = '#81D8D0';
+                ctx.shadowColor = '#81D8D0';
+                ctx.shadowBlur = 20;
+                ctx.lineWidth = 6;
+
+                // 畫蛇杖 (Central Staff)
+                ctx.beginPath();
+                ctx.moveTo(0, -80); ctx.lineTo(0, 80);
+                ctx.stroke();
+
+                // 畫纏繞的蛇 (Serpent Curve)
+                ctx.beginPath();
+                for (let t = -70; t <= 70; t += 5) {
+                    let curveX = Math.sin(t * 0.1) * 25;
+                    if (t === -70) ctx.moveTo(curveX, t);
+                    else ctx.lineTo(curveX, t);
+                }
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            function animate(timestamp) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                if (state === 'ENTER') {
+                    currentY += (targetY - currentY) * 0.1;
+                    if (Math.abs(currentY - targetY) < 2) {
+                        currentY = targetY;
+                        state = 'HOLD';
+                        holdStartTime = timestamp;
+                    }
+                } else if (state === 'HOLD') {
+                    if (timestamp - holdStartTime > 500) { // 停留 0.5 秒
+                        state = 'EXIT';
+                    }
+                } else if (state === 'EXIT') {
+                    currentY -= 25; // 向上快速飛離
+                    if (currentY < -100) state = 'DONE';
+                }
+
+                if (state !== 'DONE') {
+                    drawStaff(canvas.width / 2, currentY, 0.7);
+                    totemAnimation = requestAnimationFrame(animate);
+                }
+            }
+
+            if (totemAnimation) cancelAnimationFrame(totemAnimation);
+            totemAnimation = requestAnimationFrame(animate);
+        }
+
+        // ----------------------------------------------------
+        // Web Speech API 語音辨識機制
+        // ----------------------------------------------------
+        window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if ('SpeechRecognition' in window) {
+            const recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.lang = 'en-US';
+
+            recognition.onresult = (event) => {
+                const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
+                console.log("語音輸入:", transcript);
+                
+                if (transcript.includes("asclepius")) {
+                    triggerAsclepiusEffect();
+                }
+            };
+
+            recognition.onend = () => recognition.start(); // 自動重新啟動監聽
+            recognition.start();
+        } else {
+            alert("此瀏覽器不支援 Web Speech API，請使用 Google Chrome 測試。");
+        }
+
+        // 開啟 Camera (預留給影像演算法光訊號偵測)
+        navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+            document.getElementById('video-preview').srcObject = stream;
+        });
+    </script>
+</body>
+</html>
