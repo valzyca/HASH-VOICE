@@ -3,30 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TEST HASH+VOICE</title>
+    <title>TEST HASH+VOICE - Optical Trigger</title>
     <style>
         body, html {
             margin: 0; padding: 0; width: 100%; height: 100%;
-            overflow: hidden; background-color: #111;
+            overflow: hidden; background-color: #050505; /* 更暗的背景突出光效 */
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
 
-        /* 呼吸紅燈效果 (HASH 閃爍解調成功時) */
+        /* 呼吸紅燈效果 (HASH 驗證成功時) */
         @keyframes breathingRed {
             0% { background-color: rgba(255, 0, 0, 0.15); }
-            50% { background-color: rgba(255, 0, 0, 0.85); }
+            50% { background-color: rgba(255, 0, 0, 0.9); }
             100% { background-color: rgba(255, 0, 0, 0.15); }
         }
         .breathing-red {
             animation: breathingRed 1.5s infinite ease-in-out;
         }
 
-        /* 蒂芬妮綠護盾樣式 (#81D8D0) */
+        /* 蒂芬妮綠護盾樣式 */
         #shield-layer {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             box-sizing: border-box;
-            border: 24px solid #81D8D0;
-            box-shadow: inset 0 0 60px #81D8D0, 0 0 40px #81D8D0;
+            border: 30px solid #81D8D0;
+            box-shadow: inset 0 0 70px #81D8D0, 0 0 50px #81D8D0;
             pointer-events: none; opacity: 0; 
             transition: opacity 0.4s ease-in-out;
             z-index: 5;
@@ -34,58 +34,99 @@
         .shield-active { opacity: 1 !important; }
 
         /* Canvas 圖騰動畫繪製層 */
-        canvas {
+        #stageCanvas {
             position: absolute; top: 0; left: 0; z-index: 10; pointer-events: none;
         }
 
-        /* Webcam 即時預覽畫面 (右下角) */
-        #video-preview {
-            position: absolute; width: 220px; height: 165px;
-            bottom: 15px; right: 15px; border: 2px solid #81D8D0;
-            border-radius: 8px; transform: scaleX(-1); z-index: 20;
-            box-shadow: 0 0 15px rgba(129, 216, 208, 0.5);
+        /* Webcam 即時預覽畫面與分析用 Canvas (右下角) */
+        .video-container {
+            position: absolute; width: 240px; height: 180px;
+            bottom: 20px; right: 20px; 
+            border-radius: 12px; z-index: 20;
+            box-shadow: 0 0 20px rgba(129, 216, 208, 0.6);
+            overflow: hidden;
+            border: 2px solid #333;
         }
-        
+        #video-preview {
+            width: 100%; height: 100%; object-fit: cover;
+            transform: scaleX(-1); /* 鏡像 */
+        }
+        /* 用於展示影像分析狀態的 Overlay */
+        #analysis-overlay {
+            position: absolute; top: 10px; left: 10px;
+            color: #fff; background: rgba(0,0,0,0.7);
+            padding: 4px 8px; border-radius: 4px; font-size: 10px;
+            font-family: monospace; pointer-events: none;
+        }
+
         /* UI 狀態控制顯示介面 */
         #ui-info {
             position: absolute; top: 20px; left: 20px; color: #fff; z-index: 20;
-            background: rgba(0, 0, 0, 0.6); padding: 15px 20px; border-radius: 10px;
-            backdrop-filter: blur(5px); border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(0, 0, 0, 0.7); padding: 18px 25px; border-radius: 12px;
+            backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        #ui-info h1 { margin: 0 0 10px 0; font-size: 22px; color: #81D8D0; }
-        #ui-info p { margin: 5px 0; font-size: 14px; }
-        .log-box { font-size: 12px; color: #aaa; margin-top: 5px; font-family: monospace; }
+        #ui-info h1 { margin: 0 0 12px 0; font-size: 24px; color: #81D8D0; }
+        #ui-info p { margin: 6px 0; font-size: 14px; }
         
-        .btn-test {
-            margin-top: 10px; padding: 8px 12px; background: #81D8D0;
-            border: none; border-radius: 5px; color: #111; font-weight: bold;
-            cursor: pointer; transition: 0.2s;
+        .status-indicator {
+            display: inline-block; width: 12px; height: 12px; 
+            border-radius: 50%; background-color: #555; margin-right: 8px;
+            vertical-align: middle; transition: background-color 0.3s;
         }
-        .btn-test:hover { background: #65b8b0; }
+        .mic-active .status-indicator { background-color: #0f0; box-shadow: 0 0 10px #0f0; }
+        .optical-detect .status-indicator { background-color: #ff0; box-shadow: 0 0 10px #ff0; }
+
+        .log-box { font-size: 12px; color: #aaa; margin-top: 10px; font-family: monospace; background: rgba(0,0,0,0.4); padding: 8px; border-radius: 4px; }
+        
+        /* OpenCV 載入狀態 */
+        #cv-status {
+            position: absolute; bottom: 10px; left: 10px; color: #777; font-size: 12px; z-index: 10;
+        }
     </style>
 </head>
-<body>
+<body class="">
 
     <div id="shield-layer"></div>
     <canvas id="stageCanvas"></canvas>
-    <video id="video-preview" autoplay playsinline></video>
+
+    <div class="video-container">
+        <video id="video-preview" autoplay playsinline muted></video>
+        <div id="analysis-overlay">Optical: OFF</div>
+    </div>
 
     <div id="ui-info">
         <h1>專案：TEST HASH+VOICE</h1>
-        <p>系統狀態：<span id="status" style="color: #81D8D0;">語音/光照監聽中...</span></p>
-        <p class="log-box">最新辨識語音: <span id="speech-log" style="color: #fff;">無</span></p>
-        <button class="btn-test" onclick="simulateHashDetect()">[測試] 模擬光通訊 HASH 脈衝觸發</button>
+        
+        <p id="optical-status-ui">
+            <span class="status-indicator"></span>光學喚醒: <span class="txt">等待 2Hz 閃爍...</span>
+        </p>
+        <p id="mic-status-ui">
+            <span class="status-indicator"></span>麥克風: <span class="txt">關閉 (等待光學觸發)</span>
+        </p>
+
+        <div class="log-box">
+            最後辨識語音: <span id="speech-log" style="color: #fff;">(無)</span>
+        </div>
     </div>
+
+    <div id="cv-status">OpenCV.js loading...</div>
+
+    <!-- 載入 OpenCV.js (WebAssembly 版本) -->
+    <script async src="https://docs.opencv.org/4.5.4/opencv.js" onload="onOpenCvReady();"></script>
 
     <script>
         // =========================================================================
-        // 1. 畫布與全螢幕視覺效果 (WebAR/Canvas Engine)
+        // A. 基礎介面與 OpenCv 載入狀態
         // =========================================================================
+        const video = document.getElementById('video-preview');
         const canvas = document.getElementById('stageCanvas');
         const ctx = canvas.getContext('2d');
         const shield = document.getElementById('shield-layer');
-        const statusText = document.getElementById('status');
         const speechLog = document.getElementById('speech-log');
+        const cvStatusTxt = document.getElementById('cv-status');
+        const analysisOverlay = document.getElementById('analysis-overlay');
+        const opticalStatusUi = document.getElementById('optical-status-ui');
+        const micStatusUi = document.getElementById('mic-status-ui');
 
         function resize() {
             canvas.width = window.innerWidth;
@@ -94,210 +135,307 @@
         window.addEventListener('resize', resize);
         resize();
 
-        // --- A. 光通訊觸發：呼吸紅燈 (5秒後自動復原) ---
-        function triggerRedBreathing() {
-            statusText.innerText = "光通訊 16碼 HASH 驗證成功！進入呼吸紅色模式";
-            document.body.classList.add('breathing-red');
+        let isOpenCvReady = false;
+        function onOpenCvReady() {
+            cvStatusTxt.innerText = "OpenCV.js Ready.";
+            cvStatusTxt.style.color = "#81D8D0";
+            isOpenCvReady = true;
+            startOpticalAnalysis(); // OpenCV 準備好後啟動影像分析
+        }
+
+        // =========================================================================
+        // B. 核心邏輯 1：2Hz 光學閃爍偵測 (Webcam & OpenCV.js)
+        // =========================================================================
+        const ANALYSIS_FPS = 15; // 我們不需要Full FPS進行分析，15fps 足矣偵測 2Hz
+        let videoCapture = null;
+        let srcMat = null;
+        let grayMat = null;
+        
+        const brightnessHistory = []; // 用於記錄畫面特定區域亮度變化
+        const HISTORY_SIZE = ANALYSIS_FPS * 2; // 紀錄 2 秒的歷史
+
+        // 開啟鏡頭
+        navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, frameRate: 30 } })
+            .then(stream => { video.srcObject = stream; })
+            .catch(err => { console.error("Webcam存取失敗:", err); });
+
+        // 啟動光學分析循環
+        function startOpticalAnalysis() {
+            videoCapture = new cv.VideoCapture(video);
+            srcMat = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+            grayMat = new cv.Mat(video.height, video.width, cv.CV_8UC1);
+
+            // 每秒執行 ANALYSIS_FPS 次分析
+            setInterval(processVideoFrame, 1000 / ANALYSIS_FPS);
+        }
+
+        let lastOpticalTriggerTime = 0;
+        const VOIC_LISTEN_DURATION = 8000; // 光學觸發後，開啟麥克風監聽 8 秒
+
+        function processVideoFrame() {
+            if (!isOpenCvReady || video.paused || video.ended) return;
+
+            // 1. 抓取當前視訊幀
+            videoCapture.read(srcMat);
+            // 2. 轉為灰階 (忽略顏色，專注於亮度)
+            cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
+
+            // 3. 計算整個畫面的平均亮度 (簡易版偵測，在魔杖靠近鏡頭時最有效)
+            // 實務優化版：可以加上閾值處理(cv.threshold)只計算高亮區域的質心變化
+            let mean = cv.mean(grayMat);
+            let currentBrightness = mean[0];
+
+            // 4. 記錄亮度歷史
+            brightnessHistory.push({ t: Date.now(), v: currentBrightness });
+            if (brightnessHistory.length > HISTORY_SIZE) brightnessHistory.shift();
+
+            // 5. 分析亮度歷史，判斷是否存在 2Hz 閃爍
+            if (detect2HzFlicker()) {
+                handleOpticalTrigger();
+            }
+        }
+
+        // 2Hz 閃爍偵測演算法 (Simplified Time-Domain Analysis)
+        function detect2HzFlicker() {
+            if (brightnessHistory.length < HISTORY_SIZE) return false;
+
+            // 統計過去 2 秒內亮度上下變化的次數
+            let crossings = 0;
+            // 計算這段時間的平均亮度作為閾值
+            const sum = brightnessHistory.reduce((a, b) => a + b.v, 0);
+            const avg = sum / brightnessHistory.length;
+
+            for (let i = 1; i < brightnessHistory.length; i++) {
+                // 如果亮度穿過平均線 (向上或向下)
+                if ((brightnessHistory[i-1].v < avg && brightnessHistory[i].v >= avg) ||
+                    (brightnessHistory[i-1].v > avg && brightnessHistory[i].v <= avg)) {
+                    crossings++;
+                }
+            }
+
+            // 2Hz 在 2 秒內應該有 8 次「亮->滅」或「滅->亮」的切換 (正弦波穿過 0 點 8 次)
+            // 我們允許一點誤差：6 到 10 次
+            if (crossings >= 6 && crossings <= 10) {
+                // 檢查亮度變化振幅是否夠大 (避免環境噪音)
+                const maxB = Math.max(...brightnessHistory.map(h => h.v));
+                const minB = Math.min(...brightnessHistory.map(h => h.v));
+                if (maxB - minB > 30) { // 亮度變化差值大於 30 (0~255級)
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        let isVoicListenerActive = false;
+        let voicDisableTimer = null;
+
+        // 當光學閃爍偵測成功時
+        function handleOpticalTrigger() {
+            analysisOverlay.innerText = "Optical: DETECTED 2Hz";
+            analysisOverlay.style.color = "#ff0";
+            opticalStatusUi.classList.add('optical-detect');
+            opticalStatusUi.querySelector('.txt').innerText = "偵測到魔杖閃爍！";
+
+            // 啟動語音辨識
+            enableVoiceListener();
+        }
+
+        // =========================================================================
+        // C. 核心邏輯 2：語音監聽管理 (Speech API & Fuzzy Logic)
+        // =========================================================================
+        
+        function enableVoiceListener() {
+            // 如果語音監聽已開啟，只需重置倒數計時
+            if (isVoicListenerActive) {
+                resetVoiceDisableTimer();
+                return;
+            }
+
+            console.log("[系統] 光學觸發成功，開啟麥克風監聽咒語...");
+            isVoicListenerActive = true;
+            micStatusUi.classList.add('mic-active');
+            micStatusUi.querySelector('.txt').innerText = `已開啟 (剩餘 8 秒)`;
+
+            if (recognition) {
+                try {
+                    // 部分瀏覽器如果不需重新手動點擊，可直接在end事件後重啟，
+                    // 這裡我們在光學觸發時確實地「叫醒」它。
+                    recognition.start(); 
+                } catch(e) { /* 如果已經是start狀態會報錯，忽略它 */ }
+            }
+
+            // 8 秒後自動關閉麥克風
+            resetVoiceDisableTimer();
+        }
+
+        function disableVoiceListener() {
+            if (!isVoicListenerActive) return;
+
+            console.log("[系統] 時間到，關閉麥克風以節省效能。");
+            isVoicListenerActive = false;
+            micStatusUi.classList.remove('mic-active');
+            micStatusUi.querySelector('.txt').innerText = "關閉 (等待光學觸發)";
             
-            setTimeout(() => {
-                document.body.classList.remove('breathing-red');
-                statusText.innerText = "系統復原，繼續監聽中...";
-            }, 5000);
+            if (recognition) {
+                recognition.stop(); // 確實停止監聽
+            }
+            
+            // 重置光學UI狀態
+            opticalStatusUi.classList.remove('optical-detect');
+            opticalStatusUi.querySelector('.txt').innerText = "等待 2Hz 閃爍...";
+            analysisOverlay.innerText = "Optical: OFF";
+            analysisOverlay.style.color = "#fff";
         }
 
-        function simulateHashDetect() {
-            triggerRedBreathing();
+        // 語音關閉倒數管理
+        let timeLeft = 0;
+        let timeLeftTimer = null;
+
+        function resetVoiceDisableTimer() {
+            clearTimeout(voicDisableTimer);
+            clearInterval(timeLeftTimer);
+            
+            timeLeft = VOIC_LISTEN_DURATION / 1000;
+            updateTimeLeftUI();
+
+            timeLeftTimer = setInterval(() => {
+                timeLeft--;
+                if (timeLeft > 0) {
+                    updateTimeLeftUI();
+                } else {
+                    clearInterval(timeLeftTimer);
+                }
+            }, 1000);
+
+            voicDisableTimer = setTimeout(disableVoiceListener, VOIC_LISTEN_DURATION);
         }
 
-        // --- B. 語音魔法觸發：蒂芬妮綠護盾與半透明發光 Asclepius 圖騰飛入 ---
+        function updateTimeLeftUI() {
+            if (isVoicListenerActive) {
+                micStatusUi.querySelector('.txt').innerText = `已開啟 (剩餘 ${timeLeft} 秒)`;
+            }
+        }
+
+        // =========================================================================
+        // D. 視覺效果與模糊演算法 (完全保留前一版本邏輯)
+        // =========================================================================
+        
+        // --- 視覺防護罩與圖騰 ---
         let totemAnimation = null;
-
         function triggerAsclepiusEffect() {
-            statusText.innerText = "咒語觸發：asclepius！護盾啟動";
+            console.log("咒語驗證成功：防護罩展開！");
             shield.classList.add('shield-active');
-
-            // 啟動圖騰動畫
             startTotemAnimation();
+            
+            // 魔法展示後也重置麥克風計時 (表示玩家仍在唸咒)
+            resetVoiceDisableTimer();
 
-            // 5秒後復原
-            setTimeout(() => {
-                shield.classList.remove('shield-active');
-                statusText.innerText = "系統復原，繼續監聽中...";
-            }, 5000);
+            setTimeout(() => { shield.classList.remove('shield-active'); }, 5000);
         }
 
-        // 半透明發光 Asclepius 蛇杖圖騰繪製動畫
         function startTotemAnimation() {
             let startY = canvas.height + 150;
             let targetY = canvas.height / 2;
             let currentY = startY;
-            let state = 'ENTER'; // ENTER (飛入), HOLD (停留), EXIT (飛離), DONE
+            let state = 'ENTER';
             let holdStartTime = 0;
 
             function drawStaff(x, y, alpha) {
-                ctx.save();
-                ctx.translate(x, y);
-                ctx.globalAlpha = alpha;
-                ctx.strokeStyle = '#81D8D0';
-                ctx.fillStyle = '#81D8D0';
-                ctx.shadowColor = '#81D8D0';
-                ctx.shadowBlur = 25;
-                ctx.lineWidth = 8;
-
-                // 繪製中央發光杖身
-                ctx.beginPath();
-                ctx.moveTo(0, -100); ctx.lineTo(0, 100);
-                ctx.stroke();
-
-                // 繪製頂端光點
-                ctx.beginPath();
-                ctx.arc(0, -100, 12, 0, Math.PI * 2);
-                ctx.fill();
-
-                // 繪製纏繞蛇身 (Serpent Vector Curve)
+                ctx.save(); ctx.translate(x, y); ctx.globalAlpha = alpha;
+                ctx.strokeStyle = '#81D8D0'; ctx.fillStyle = '#81D8D0';
+                ctx.shadowColor = '#81D8D0'; ctx.shadowBlur = 25; ctx.lineWidth = 8;
+                ctx.beginPath(); ctx.moveTo(0, -100); ctx.lineTo(0, 100); ctx.stroke();
+                ctx.beginPath(); ctx.arc(0, -100, 12, 0, Math.PI * 2); ctx.fill();
                 ctx.beginPath();
                 for (let t = -90; t <= 90; t += 5) {
                     let curveX = Math.sin(t * 0.08) * 35;
-                    if (t === -90) ctx.moveTo(curveX, t);
-                    else ctx.lineTo(curveX, t);
+                    if (t === -90) ctx.moveTo(curveX, t); else ctx.lineTo(curveX, t);
                 }
-                ctx.stroke();
-                ctx.restore();
+                ctx.stroke(); ctx.restore();
             }
 
             function animate(timestamp) {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-
                 if (state === 'ENTER') {
-                    currentY += (targetY - currentY) * 0.12; // 飛入緩動
-                    if (Math.abs(currentY - targetY) < 3) {
-                        currentY = targetY;
-                        state = 'HOLD';
-                        holdStartTime = timestamp;
-                    }
+                    currentY += (targetY - currentY) * 0.12;
+                    if (Math.abs(currentY - targetY) < 3) { currentY = targetY; state = 'HOLD'; holdStartTime = timestamp; }
                 } else if (state === 'HOLD') {
-                    if (timestamp - holdStartTime > 500) { // 停留 0.5 秒
-                        state = 'EXIT';
-                    }
+                    if (timestamp - holdStartTime > 500) { state = 'EXIT'; }
                 } else if (state === 'EXIT') {
-                    currentY -= 35; // 向上快速飛離
-                    if (currentY < -150) state = 'DONE';
+                    currentY -= 35; if (currentY < -150) state = 'DONE';
                 }
-
-                if (state !== 'DONE') {
-                    drawStaff(canvas.width / 2, currentY, 0.75); // 0.75 半透明發光
-                    totemAnimation = requestAnimationFrame(animate);
-                }
+                if (state !== 'DONE') { drawStaff(canvas.width / 2, currentY, 0.75); totemAnimation = requestAnimationFrame(animate); }
             }
-
             if (totemAnimation) cancelAnimationFrame(totemAnimation);
             totemAnimation = requestAnimationFrame(animate);
         }
 
-
-        // =========================================================================
-        // 2. 跨口音語音魔法辨識架構與模糊演算法 (Fuzzy Matching Engine)
-        // =========================================================================
-
-        // 編輯距離演算法 (Levenshtein Distance Calculation)
+        // --- 跨口音模糊比對與 Web Speech API ---
         function calculateLevenshteinDistance(a, b) {
-            const matrix = Array.from({ length: a.length + 1 }, () => 
-                Array(b.length + 1).fill(0)
-            );
-
+            const matrix = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0) );
             for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
             for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
-
             for (let i = 1; i <= a.length; i++) {
                 for (let j = 1; j <= b.length; j++) {
                     const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-                    matrix[i][j] = Math.min(
-                        matrix[i - 1][j] + 1,       // 刪除
-                        matrix[i][j - 1] + 1,       // 插入
-                        matrix[i - 1][j - 1] + cost // 替換
-                    );
+                    matrix[i][j] = Math.min( matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost );
                 }
             }
             return matrix[a.length][b.length];
         }
-
-        // 字串相似度比例計算器 (0.0 ~ 1.0)
         function getSimilarity(str1, str2) {
             const distance = calculateLevenshteinDistance(str1, str2);
             const maxLength = Math.max(str1.length, str2.length);
-            if (maxLength === 0) return 1.0;
-            return (1.0 - distance / maxLength);
+            if (maxLength === 0) return 1.0; return (1.0 - distance / maxLength);
         }
 
-        // 魔法語音庫與跨口音變體資料庫 (Phonetic Variant DB)
         const SPELL_DATABASE = {
             "asclepius": {
-                aliases: [
-                    "asclepius", "asclepios", "esclepius", "ask lepius", 
-                    "ass clepius", "ask lepios", "ask lepias", "usclepius",
-                    "asclepiose", "asclepes", "asklepios"
-                ],
+                aliases: ["asclepius", "asclepios", "esclepius", "ask lepius", "ass clepius", "usclepius", "asklepios"],
                 action: triggerAsclepiusEffect
             }
         };
 
-        // 模糊比對評估核心函式
         function evaluateSpellVoice(spokenText) {
             const cleanInput = spokenText.trim().toLowerCase();
-            const SIMILARITY_THRESHOLD = 0.65; // 65% 相似度即判定魔法觸發成功
-
+            const SIMILARITY_THRESHOLD = 0.65;
             for (const [spellName, config] of Object.entries(SPELL_DATABASE)) {
-                // A. 直比主詞 Similarity
                 const mainScore = getSimilarity(cleanInput, spellName);
-                if (mainScore >= SIMILARITY_THRESHOLD) {
-                    console.log(`[魔法成功] 主詞通過, 相似度: ${(mainScore * 100).toFixed(1)}%`);
-                    config.action();
-                    return true;
-                }
-
-                // B. 口音變體庫 Alias 比對
+                if (mainScore >= SIMILARITY_THRESHOLD) { console.log(`魔法主詞通過(${mainScore.toFixed(2)})`); config.action(); return true; }
                 for (const alias of config.aliases) {
                     if (cleanInput.includes(alias) || getSimilarity(cleanInput, alias) >= SIMILARITY_THRESHOLD) {
-                        console.log(`[魔法成功] 變體庫通過: "${alias}"`);
-                        config.action();
-                        return true;
+                        console.log(`魔法變體通過: "${alias}"`); config.action(); return true;
                     }
                 }
             }
             return false;
         }
 
-        // =========================================================================
-        // 3. Web Speech API 語音監聽初始化
-        // =========================================================================
-        window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-        if ('SpeechRecognition' in window) {
-            const recognition = new SpeechRecognition();
+        // --- Web Speech API 初始化 (改為不自動持續start，受光學控制) ---
+        let recognition = null;
+        if ('webkitSpeechRecognition' in window) {
+            recognition = new webkitSpeechRecognition();
             recognition.continuous = true;
             recognition.interimResults = false;
-            recognition.lang = 'en-US'; // 基礎設為英文，模糊演算法會自動處理口音偏誤
+            recognition.lang = 'en-US';
 
             recognition.onresult = (event) => {
                 const transcript = event.results[event.results.length - 1][0].transcript;
                 speechLog.innerText = transcript;
-                
-                // 傳入跨口音模糊比對引擎
                 evaluateSpellVoice(transcript);
             };
 
-            recognition.onerror = (e) => console.log('語音辨識提示/錯誤:', e.error);
-            recognition.onend = () => recognition.start(); // 保持持續監聽
-            
-            recognition.start();
-        } else {
-            alert("您的瀏覽器不支援 Web Speech API，請改用 Chrome 開啟。");
-        }
+            recognition.onerror = (e) => {
+                if (e.error !== 'no-speech') console.log('語音辨識提示/錯誤:', e.error);
+            };
 
-        // 開啟鏡頭預覽 (預留給視覺解調光訊號使用)
-        navigator.mediaDevices.getUserMedia({ video: true })
-            .then(stream => { document.getElementById('video-preview').srcObject = stream; })
-            .catch(err => { console.log("無法取得攝影機權限:", err); });
+            // 如果辨識被動停止，我們只在仍是Active狀態下重啟它
+            recognition.onend = () => {
+                if (isVoicListenerActive) recognition.start();
+            };
+        } else {
+            alert("此瀏覽器不支援 Speech API，請改用 Chrome 開啟。");
+        }
     </script>
 </body>
 </html>
