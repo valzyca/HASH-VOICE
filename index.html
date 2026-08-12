@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TEST HASH+VOICE - Debug Checklist</title>
+    <title>TEST HASH+VOICE - Debug Checklist (Fixed)</title>
     <style>
         body, html {
             margin: 0; padding: 0; width: 100%; height: 100%;
@@ -26,7 +26,7 @@
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             box-sizing: border-box; border: 30px solid #81D8D0;
             box-shadow: inset 0 0 70px #81D8D0, 0 0 50px #81D8D0;
-            pointer-events: none; opacity: 0; 
+            pointer-events: none; opacity: 0;
             transition: opacity 0.4s ease-in-out; z-index: 5;
         }
         .shield-active { opacity: 1 !important; }
@@ -60,7 +60,7 @@
             min-width: 320px;
         }
         #ui-info h1 { margin: 0 0 10px 0; font-size: 22px; color: #81D8D0; }
-        
+
         /* 除錯 Checklist 樣式 */
         .debug-panel {
             margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.2);
@@ -91,7 +91,7 @@
         #cv-status {
             position: absolute; bottom: 10px; left: 10px; color: #777; font-size: 12px; z-index: 10;
         }
-        
+
         .btn-sim {
             margin-top: 10px; padding: 6px 10px; background: #333; color: #81D8D0;
             border: 1px solid #81D8D0; border-radius: 4px; cursor: pointer; font-size: 11px;
@@ -116,19 +116,19 @@
 
         <div class="debug-panel">
             <div class="debug-title">🔍 除錯即時狀態條 (DEBUG CHECKLIST)</div>
-            
+
             <div id="chk-optical" class="checklist-item">
                 <span class="icon">⬜</span> 1. 光學喚醒 (偵測到 2Hz 閃爍)
             </div>
-            
+
             <div id="chk-hash" class="checklist-item">
                 <span class="icon">⬜</span> 2. HASH 碼比對成功
             </div>
-            
+
             <div id="chk-mic-on" class="checklist-item">
                 <span class="icon">⬜</span> 3. 麥克風開啟
             </div>
-            
+
             <!-- 進入網頁時預設即是打勾狀態 -->
             <div id="chk-mic-off" class="checklist-item checked">
                 <span class="icon">✅</span> 4. 麥克風關閉
@@ -169,7 +169,7 @@
         }
 
         // =========================================================================
-        // B. 基礎介面與 OpenCv 載入
+        // B. 基礎介面
         // =========================================================================
         const video = document.getElementById('video-preview');
         const canvas = document.getElementById('stageCanvas');
@@ -186,12 +186,22 @@
         window.addEventListener('resize', resize);
         resize();
 
+        // [修正] OpenCV 就緒與 Video 就緒是兩條獨立的非同步流程，
+        // 必須「兩者都完成」才能安全啟動分析，否則 Mat 尺寸會是 0x0。
         let isOpenCvReady = false;
+        let isVideoReady = false;
+
         function onOpenCvReady() {
             cvStatusTxt.innerText = "OpenCV.js Ready.";
             cvStatusTxt.style.color = "#81D8D0";
             isOpenCvReady = true;
-            startOpticalAnalysis();
+            tryStartAnalysis();
+        }
+
+        function tryStartAnalysis() {
+            if (isOpenCvReady && isVideoReady && !videoCapture) {
+                startOpticalAnalysis();
+            }
         }
 
         // =========================================================================
@@ -204,8 +214,23 @@
         const HISTORY_SIZE = ANALYSIS_FPS * 2;
 
         navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, frameRate: 30 } })
-            .then(stream => { video.srcObject = stream; })
-            .catch(err => { console.error("Webcam存取失敗:", err); });
+            .then(stream => {
+                video.srcObject = stream;
+                // [修正] 等 metadata 載入後才拿得到真正的 videoWidth/videoHeight，
+                // 並把它們寫回 video.width / video.height（IDL 屬性），
+                // 這樣 cv.VideoCapture 和 cv.Mat 才會用正確的尺寸建立。
+                video.onloadedmetadata = () => {
+                    video.width = video.videoWidth || 320;
+                    video.height = video.videoHeight || 240;
+                    isVideoReady = true;
+                    tryStartAnalysis();
+                };
+            })
+            .catch(err => {
+                console.error("Webcam存取失敗:", err);
+                cvStatusTxt.innerText = "攝影機存取失敗（請確認權限 / HTTPS）";
+                cvStatusTxt.style.color = "#f55";
+            });
 
         function startOpticalAnalysis() {
             videoCapture = new cv.VideoCapture(video);
@@ -216,23 +241,29 @@
         }
 
         function processVideoFrame() {
-            if (!isOpenCvReady || video.paused || video.ended) return;
+            if (!isOpenCvReady || !isVideoReady || video.paused || video.ended) return;
 
-            videoCapture.read(srcMat);
-            cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
+            // [修正] 加上 try/catch，避免單一 frame 讀取失敗時
+            // setInterval 每次都拋錯洗版 console、甚至中斷偵測。
+            try {
+                videoCapture.read(srcMat);
+                cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
 
-            let mean = cv.mean(grayMat);
-            brightnessHistory.push({ t: Date.now(), v: mean[0] });
-            if (brightnessHistory.length > HISTORY_SIZE) brightnessHistory.shift();
+                let mean = cv.mean(grayMat);
+                brightnessHistory.push({ t: Date.now(), v: mean[0] });
+                if (brightnessHistory.length > HISTORY_SIZE) brightnessHistory.shift();
 
-            // 1. 檢測 2Hz 閃爍 (光學喚醒)
-            if (detect2HzFlicker()) {
-                handleOpticalTrigger();
-            } else {
-                // 如果未偵測到，取消 2Hz 打勾 (除非麥克風開啟中)
-                if (!isVoicListenerActive) {
-                    setCheckStatus(chkOptical, false);
+                // 1. 檢測 2Hz 閃爍 (光學喚醒)
+                if (detect2HzFlicker()) {
+                    handleOpticalTrigger();
+                } else {
+                    // 如果未偵測到，取消 2Hz 打勾 (除非麥克風開啟中)
+                    if (!isVoicListenerActive) {
+                        setCheckStatus(chkOptical, false);
+                    }
                 }
+            } catch (e) {
+                console.error("Frame 分析失敗:", e);
             }
         }
 
@@ -277,7 +308,7 @@
             setCheckStatus(chkHash, true);
 
             document.body.classList.add('breathing-red');
-            
+
             setTimeout(() => {
                 document.body.classList.remove('breathing-red');
                 setCheckStatus(chkHash, false); // 復原後取消打勾
@@ -325,7 +356,7 @@
             setCheckStatus(chkOptical, false); // 關閉麥克風時順便復原光學觸發狀態
 
             if (recognition) {
-                recognition.stop();
+                try { recognition.stop(); } catch(e) {}
             }
 
             analysisOverlay.innerText = "Optical: IDLE";
@@ -442,8 +473,22 @@
             };
 
             recognition.onerror = (e) => { if (e.error !== 'no-speech') console.log('Speech Error:', e.error); };
-            recognition.onend = () => { if (isVoicListenerActive) recognition.start(); };
+            recognition.onend = () => {
+                // [修正] 這裡原本沒有 try/catch，若與其他 start() 呼叫時序撞在一起
+                // 會拋出 InvalidStateError，導致語音辨識整個停擺。
+                if (isVoicListenerActive) {
+                    try { recognition.start(); } catch(e) {}
+                }
+            };
+        } else {
+            console.warn('此瀏覽器不支援 webkitSpeechRecognition（建議使用 Chrome）。');
         }
+
+        // [新增] 頁面卸載時釋放 OpenCV Mat，避免 WASM 記憶體洩漏
+        window.addEventListener('beforeunload', () => {
+            if (srcMat) srcMat.delete();
+            if (grayMat) grayMat.delete();
+        });
     </script>
 </body>
 </html>
