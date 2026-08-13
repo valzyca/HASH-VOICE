@@ -95,8 +95,22 @@
         .btn-sim {
             margin-top: 10px; padding: 6px 10px; background: #333; color: #81D8D0;
             border: 1px solid #81D8D0; border-radius: 4px; cursor: pointer; font-size: 11px;
+            display: block; width: 100%; box-sizing: border-box;
         }
         .btn-sim:hover { background: #81D8D0; color: #111; }
+
+        /* HASH 比對監聽中的按鈕樣式 */
+        .btn-sim.active {
+            background: #ff3333; color: #fff; border-color: #ff3333;
+            animation: pulseBtn 1s infinite ease-in-out;
+        }
+        @keyframes pulseBtn {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        #hash-status {
+            font-size: 11px; color: #81D8D0; margin-top: 6px; font-family: monospace;
+        }
     </style>
 </head>
 <body>
@@ -141,6 +155,10 @@
 
         <!-- 模擬測試按鈕 (方便離線除錯) -->
         <button class="btn-sim" onclick="simulateHashDetect()">[測試] 模擬接收 HASH 光訊號</button>
+
+        <!-- 真正的 HASH 光學偵測比對開關 -->
+        <button id="hash-btn" class="btn-sim" onclick="toggleHashDetection()">🔓 啟動 HASH 比對</button>
+        <div id="hash-status">狀態：待機</div>
     </div>
 
     <div id="cv-status">OpenCV.js loading...</div>
@@ -178,6 +196,8 @@
         const speechLog = document.getElementById('speech-log');
         const cvStatusTxt = document.getElementById('cv-status');
         const analysisOverlay = document.getElementById('analysis-overlay');
+        const hashBtn = document.getElementById('hash-btn');
+        const hashStatusEl = document.getElementById('hash-status');
 
         function resize() {
             canvas.width = window.innerWidth;
@@ -207,7 +227,10 @@
         // =========================================================================
         // C. 光學喚醒 (2Hz) 與 HASH 光通訊解調
         // =========================================================================
-        const ANALYSIS_FPS = 15;
+        // [修正] 韌體 HASH 位元時長已改為 100ms/bit，15fps(每張66ms)只能取到約1.5張/bit，
+        // 多數決容易被單張雜訊帶偏；拉高到 30fps(與 getUserMedia 要求的 frameRate 一致)，
+        // 可取到約 3 張/bit，多數決濾雜訊才可靠。（一般 2Hz 喚醒偵測用同一個幀率不受影響）
+        const ANALYSIS_FPS = 30;
         let videoCapture = null;
         let srcMat = null, grayMat = null;
         const brightnessHistory = [];
@@ -250,8 +273,18 @@
                 cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
 
                 let mean = cv.mean(grayMat);
-                brightnessHistory.push({ t: Date.now(), v: mean[0] });
+                const now = Date.now();
+                brightnessHistory.push({ t: now, v: mean[0] });
                 if (brightnessHistory.length > HISTORY_SIZE) brightnessHistory.shift();
+
+                // [修正] HASH 訊號韌體端是用「純紅光」調變，灰階平均會被 G/B 權重稀釋
+                // (灰階公式紅色只佔約0.299)，改直接讀 srcMat 的 R 色版，訊噪比更好。
+                // srcMat 是 VideoCapture 從 canvas 讀出的 RGBA，channel 0 = R。
+                const srcMean = cv.mean(srcMat);
+                const redMean = srcMean[0];
+
+                // 若使用者已啟動 HASH 比對監聽，把這一幀的紅色色版亮度丟給 HASH 解調器
+                handleHashSample(redMean, now);
 
                 // 1. 檢測 2Hz 閃爍 (光學喚醒)
                 if (detect2HzFlicker()) {
@@ -317,6 +350,145 @@
 
         function simulateHashDetect() {
             triggerRedBreathing();
+        }
+
+        // =========================================================================
+        // D-2. HASH 光學解調協定 (OOK / On-Off Keying)
+        //
+        // 已對照 firmware_double_longpress_hash.ino 實際規格調整：
+        //   [ 6 個半週期的前導閃爍 SYNC_PATTERN，對應韌體「快速閃爍3次」 ]
+        //   + [ 128-bit 資料，對應韌體 16 個 ASCII 字元（每字元 8-bit，MSB-first）]
+        // 韌體端前導脈衝與資料位元已統一使用 HASH_BIT_DURATION_MS(100ms) 同一個時脈，
+        // 網頁端用「滑動視窗」持續解出 bit，一旦視窗前段比對到同步碼，
+        // 就把後面 128 bit 依 8-bit 一組還原成 ASCII 字元，跟 EXPECTED_HASH 字串比對。
+        // =========================================================================
+        const HASH_CONFIG = {
+            BIT_DURATION_MS: 100,              // 對應韌體 HASH_BIT_DURATION_MS，須保持一致
+            SYNC_PATTERN: [1, 0, 1, 0, 1, 0],  // 對應韌體「ON 40ms→OFF 40ms 共3次」的節奏(6個半週期)
+            PAYLOAD_BITS: 128,                 // 16 個 ASCII 字元 × 8 bits
+            EXPECTED_HASH: "A1B2C3D4E5F67890", // 對應韌體 HASH_CODE 字串（非16進位運算值，是明碼字串）
+            LISTEN_TIMEOUT_MS: 20000,          // 監聽逾時：前導(0.6s)+資料(12.8s)≈13.4s，抓20s留餘裕
+            THRESHOLD_MARGIN: 30               // 紅色色版是滿幅0↔255切換，訊噪比佳，可用較高門檻抗雜訊
+        };
+        const HASH_TOTAL_BITS = HASH_CONFIG.SYNC_PATTERN.length + HASH_CONFIG.PAYLOAD_BITS;
+
+        let isHashListening = false;
+        let hashListenStartTime = 0;
+        let hashBaseline = null;           // 動態基準亮度（跟隨環境光緩慢調整）
+        const BASELINE_ALPHA = 0.02;
+
+        let currentBitSamples = [];        // 目前這個 bit 週期內收集到的原始樣本
+        let currentBitStartTime = 0;
+        let decodedBitStream = [];         // 已解出的 bit（滑動視窗，長度上限 HASH_TOTAL_BITS）
+
+        // 每一幀呼叫一次：只有在 isHashListening 時才會實際處理
+        function handleHashSample(meanBrightness, now) {
+            if (!isHashListening) return;
+
+            // 動態基準線：緩慢跟隨環境光平均亮度，避免長時間監聽時因環境光變化誤判
+            if (hashBaseline === null) hashBaseline = meanBrightness;
+            hashBaseline = hashBaseline * (1 - BASELINE_ALPHA) + meanBrightness * BASELINE_ALPHA;
+
+            const bitLevel =
+                meanBrightness > hashBaseline + HASH_CONFIG.THRESHOLD_MARGIN ? 1 :
+                meanBrightness < hashBaseline - HASH_CONFIG.THRESHOLD_MARGIN ? 0 :
+                null; // 落在基準線附近視為雜訊，不採計
+
+            if (currentBitStartTime === 0) currentBitStartTime = now;
+            if (bitLevel !== null) currentBitSamples.push(bitLevel);
+
+            // 一個 bit 週期結束時，用多數決判斷這個 bit 是 0 還是 1
+            if (now - currentBitStartTime >= HASH_CONFIG.BIT_DURATION_MS) {
+                if (currentBitSamples.length > 0) {
+                    const ones = currentBitSamples.filter(b => b === 1).length;
+                    const bit = ones > currentBitSamples.length / 2 ? 1 : 0;
+                    pushDecodedBit(bit);
+                }
+                currentBitSamples = [];
+                currentBitStartTime = now;
+            }
+
+            // 監聽逾時
+            if (now - hashListenStartTime > HASH_CONFIG.LISTEN_TIMEOUT_MS) {
+                stopHashListening('timeout');
+            }
+        }
+
+        function pushDecodedBit(bit) {
+            decodedBitStream.push(bit);
+            if (decodedBitStream.length > HASH_TOTAL_BITS) decodedBitStream.shift();
+            if (decodedBitStream.length === HASH_TOTAL_BITS) {
+                tryMatchHash();
+            }
+        }
+
+        function tryMatchHash() {
+            const syncLen = HASH_CONFIG.SYNC_PATTERN.length;
+            const candidateSync = decodedBitStream.slice(0, syncLen);
+            const isSyncMatch = candidateSync.every((b, i) => b === HASH_CONFIG.SYNC_PATTERN[i]);
+
+            if (!isSyncMatch) return; // 同步碼沒對齊，繼續等下一個 bit 滑進視窗
+
+            const payloadBits = decodedBitStream.slice(syncLen);
+            const decodedString = bitsToAscii(payloadBits);
+            hashStatusEl.innerText = `狀態：偵測到訊號，解碼值 ${decodedString}`;
+
+            if (decodedString === HASH_CONFIG.EXPECTED_HASH) {
+                onHashMatchSuccess(decodedString);
+            }
+            // 不論成功與否都清空緩衝，避免同一段訊號重複觸發判定
+            decodedBitStream = [];
+        }
+
+        // 8-bit 一組還原成 ASCII 字元（對應韌體 MSB-first 的 8-bit 字元編碼）
+        function bitsToAscii(bits) {
+            let str = '';
+            for (let i = 0; i < bits.length; i += 8) {
+                const byteBits = bits.slice(i, i + 8);
+                const value = byteBits.reduce((acc, b) => (acc << 1) | b, 0);
+                str += String.fromCharCode(value);
+            }
+            return str;
+        }
+
+        function onHashMatchSuccess(decodedString) {
+            hashStatusEl.innerText = `狀態：比對成功 ✅ (HASH=${decodedString})`;
+            triggerRedBreathing(); // 沿用原本效果：打勾項目2、紅色呼吸燈 5 秒後自動復原
+            stopHashListening('success');
+        }
+
+        function toggleHashDetection() {
+            if (isHashListening) {
+                stopHashListening('manual');
+            } else {
+                startHashListening();
+            }
+        }
+
+        function startHashListening() {
+            isHashListening = true;
+            hashListenStartTime = Date.now();
+            hashBaseline = null;
+            currentBitSamples = [];
+            currentBitStartTime = 0;
+            decodedBitStream = [];
+
+            hashBtn.innerText = '⏹ 停止 HASH 偵測';
+            hashBtn.classList.add('active');
+            hashStatusEl.innerText = '狀態：監聽中...';
+        }
+
+        function stopHashListening(reason) {
+            isHashListening = false;
+            hashBtn.innerText = '🔓 啟動 HASH 比對';
+            hashBtn.classList.remove('active');
+
+            if (reason === 'timeout') {
+                hashStatusEl.innerText = '狀態：監聽逾時 ❌，請重新嘗試';
+            } else if (reason === 'manual') {
+                hashStatusEl.innerText = '狀態：已手動停止';
+            }
+            // reason === 'success' 的文字已在 onHashMatchSuccess 設定，這裡不覆蓋
         }
 
         // =========================================================================
