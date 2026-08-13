@@ -3,664 +3,2390 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TEST HASH+VOICE - Debug Checklist (Fixed)</title>
+
+    <title>TEST HASH+VOICE - Optical ROI Sync</title>
+
     <style>
         body, html {
-            margin: 0; padding: 0; width: 100%; height: 100%;
-            overflow: hidden; background-color: #050505;
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #050505;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
 
-        /* 呼吸紅燈效果 (HASH 驗證成功時) */
         @keyframes breathingRed {
-            0% { background-color: rgba(255, 0, 0, 0.15); }
-            50% { background-color: rgba(255, 0, 0, 0.9); }
-            100% { background-color: rgba(255, 0, 0, 0.15); }
+            0% {
+                background-color: rgba(255, 0, 0, 0.15);
+            }
+
+            50% {
+                background-color: rgba(255, 0, 0, 0.9);
+            }
+
+            100% {
+                background-color: rgba(255, 0, 0, 0.15);
+            }
         }
+
         .breathing-red {
             animation: breathingRed 1.5s infinite ease-in-out;
         }
 
-        /* 蒂芬妮綠護盾樣式 */
         #shield-layer {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            box-sizing: border-box; border: 30px solid #81D8D0;
-            box-shadow: inset 0 0 70px #81D8D0, 0 0 50px #81D8D0;
-            pointer-events: none; opacity: 0;
-            transition: opacity 0.4s ease-in-out; z-index: 5;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            box-sizing: border-box;
+            border: 30px solid #81D8D0;
+            box-shadow:
+                inset 0 0 70px #81D8D0,
+                0 0 50px #81D8D0;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.4s ease-in-out;
+            z-index: 5;
         }
-        .shield-active { opacity: 1 !important; }
 
-        /* Canvas 圖騰繪製層 */
+        .shield-active {
+            opacity: 1 !important;
+        }
+
         #stageCanvas {
-            position: absolute; top: 0; left: 0; z-index: 10; pointer-events: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 10;
+            pointer-events: none;
         }
 
-        /* Webcam 視訊預覽 (右下角) */
         .video-container {
-            position: absolute; width: 240px; height: 180px;
-            bottom: 20px; right: 20px; border-radius: 12px; z-index: 20;
-            box-shadow: 0 0 20px rgba(129, 216, 208, 0.6); overflow: hidden;
+            position: absolute;
+            width: 280px;
+            height: 210px;
+            bottom: 20px;
+            right: 20px;
+            border-radius: 12px;
+            z-index: 20;
+            box-shadow:
+                0 0 20px rgba(129, 216, 208, 0.6);
+            overflow: hidden;
             border: 2px solid #333;
         }
+
         #video-preview {
-            width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);
-        }
-        #analysis-overlay {
-            position: absolute; top: 10px; left: 10px; color: #fff;
-            background: rgba(0,0,0,0.75); padding: 4px 8px; border-radius: 4px;
-            font-size: 11px; font-family: monospace; pointer-events: none;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
         }
 
-        /* UI 與除錯 Checklist 面板 (左上角) */
+        #analysis-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            background: rgba(0, 0, 0, 0.75);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: monospace;
+            pointer-events: none;
+        }
+
         #ui-info {
-            position: absolute; top: 20px; left: 20px; color: #fff; z-index: 20;
-            background: rgba(0, 0, 0, 0.75); padding: 20px 25px; border-radius: 12px;
-            backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.15);
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #fff;
+            z-index: 20;
+            background: rgba(0, 0, 0, 0.75);
+            padding: 20px 25px;
+            border-radius: 12px;
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
             min-width: 320px;
         }
-        #ui-info h1 { margin: 0 0 10px 0; font-size: 22px; color: #81D8D0; }
 
-        /* 除錯 Checklist 樣式 */
+        #ui-info h1 {
+            margin: 0 0 10px 0;
+            font-size: 22px;
+            color: #81D8D0;
+        }
+
         .debug-panel {
-            margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.2);
+            margin-top: 15px;
+            border-top: 1px solid rgba(255,255,255,0.2);
             padding-top: 12px;
         }
+
         .debug-title {
-            font-size: 13px; color: #aaa; margin-bottom: 8px; font-weight: bold;
+            font-size: 13px;
+            color: #aaa;
+            margin-bottom: 8px;
+            font-weight: bold;
             letter-spacing: 1px;
         }
+
         .checklist-item {
-            font-size: 14px; margin: 8px 0; color: #777;
-            display: flex; align-items: center; transition: color 0.3s;
+            font-size: 14px;
+            margin: 8px 0;
+            color: #777;
+            display: flex;
+            align-items: center;
+            transition: color 0.3s;
         }
+
         .checklist-item .icon {
-            display: inline-block; width: 20px; font-size: 16px; margin-right: 8px;
+            display: inline-block;
+            width: 20px;
+            font-size: 16px;
+            margin-right: 8px;
             text-align: center;
         }
-        /* 打勾與啟用狀態 */
+
         .checklist-item.checked {
-            color: #81D8D0; font-weight: bold;
-            text-shadow: 0 0 8px rgba(129, 216, 208, 0.4);
+            color: #81D8D0;
+            font-weight: bold;
+            text-shadow:
+                0 0 8px rgba(129, 216, 208, 0.4);
         }
 
         .log-box {
-            font-size: 12px; color: #aaa; margin-top: 12px; font-family: monospace;
-            background: rgba(0,0,0,0.5); padding: 8px; border-radius: 4px;
+            font-size: 12px;
+            color: #aaa;
+            margin-top: 12px;
+            font-family: monospace;
+            background: rgba(0,0,0,0.5);
+            padding: 8px;
+            border-radius: 4px;
         }
+
         #cv-status {
-            position: absolute; bottom: 10px; left: 10px; color: #777; font-size: 12px; z-index: 10;
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: #777;
+            font-size: 12px;
+            z-index: 10;
         }
 
         .btn-sim {
-            margin-top: 10px; padding: 6px 10px; background: #333; color: #81D8D0;
-            border: 1px solid #81D8D0; border-radius: 4px; cursor: pointer; font-size: 11px;
-            display: block; width: 100%; box-sizing: border-box;
+            margin-top: 10px;
+            padding: 6px 10px;
+            background: #333;
+            color: #81D8D0;
+            border: 1px solid #81D8D0;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
         }
-        .btn-sim:hover { background: #81D8D0; color: #111; }
 
-        /* HASH 比對監聽中的按鈕樣式 */
+        .btn-sim:hover {
+            background: #81D8D0;
+            color: #111;
+        }
+
         .btn-sim.active {
-            background: #ff3333; color: #fff; border-color: #ff3333;
+            background: #ff3333;
+            color: #fff;
+            border-color: #ff3333;
             animation: pulseBtn 1s infinite ease-in-out;
         }
+
         @keyframes pulseBtn {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.6; }
+            0%, 100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.6;
+            }
         }
+
         #hash-status {
-            font-size: 11px; color: #81D8D0; margin-top: 6px; font-family: monospace;
+            font-size: 11px;
+            color: #81D8D0;
+            margin-top: 6px;
+            font-family: monospace;
         }
     </style>
 </head>
+
 <body>
 
     <div id="shield-layer"></div>
+
     <canvas id="stageCanvas"></canvas>
 
     <div class="video-container">
-        <video id="video-preview" autoplay playsinline muted></video>
-        <div id="analysis-overlay">Optical: IDLE</div>
+
+        <video
+            id="video-preview"
+            autoplay
+            playsinline
+            muted>
+        </video>
+
+        <div id="analysis-overlay">
+            Optical: IDLE
+        </div>
+
     </div>
 
-    <!-- 主面板與除錯 Checklist -->
     <div id="ui-info">
+
         <h1>TEST HASH+VOICE</h1>
-        <p style="margin: 0; font-size: 13px; color: #ccc;">系統狀態監視面板</p>
+
+        <p style="margin:0;font-size:13px;color:#ccc;">
+            系統狀態監視面板
+        </p>
 
         <div class="debug-panel">
-            <div class="debug-title">🔍 除錯即時狀態條 (DEBUG CHECKLIST)</div>
 
-            <div id="chk-optical" class="checklist-item">
-                <span class="icon">⬜</span> 1. 光學喚醒 (偵測到 2Hz 閃爍)
+            <div class="debug-title">
+                🔍 除錯即時狀態條
             </div>
 
-            <div id="chk-hash" class="checklist-item">
-                <span class="icon">⬜</span> 2. HASH 碼比對成功
+            <div
+                id="chk-optical"
+                class="checklist-item">
+
+                <span class="icon">⬜</span>
+                1. 光學喚醒
             </div>
 
-            <div id="chk-mic-on" class="checklist-item">
-                <span class="icon">⬜</span> 3. 麥克風開啟
+            <div
+                id="chk-hash"
+                class="checklist-item">
+
+                <span class="icon">⬜</span>
+                2. HASH 碼比對成功
             </div>
 
-            <!-- 進入網頁時預設即是打勾狀態 -->
-            <div id="chk-mic-off" class="checklist-item checked">
-                <span class="icon">✅</span> 4. 麥克風關閉
+            <div
+                id="chk-mic-on"
+                class="checklist-item">
+
+                <span class="icon">⬜</span>
+                3. 麥克風開啟
             </div>
+
+            <div
+                id="chk-mic-off"
+                class="checklist-item checked">
+
+                <span class="icon">✅</span>
+                4. 麥克風關閉
+            </div>
+
         </div>
 
         <div class="log-box">
-            最後辨識語音: <span id="speech-log" style="color: #fff;">(無)</span>
+
+            最後辨識語音：
+
+            <span
+                id="speech-log"
+                style="color:#fff;">
+                (無)
+            </span>
+
         </div>
 
-        <!-- 模擬測試按鈕 (方便離線除錯) -->
-        <button class="btn-sim" onclick="simulateHashDetect()">[測試] 模擬接收 HASH 光訊號</button>
+        <button
+            class="btn-sim"
+            onclick="simulateHashDetect()">
 
-        <!-- 真正的 HASH 光學偵測比對開關 -->
-        <button id="hash-btn" class="btn-sim" onclick="toggleHashDetection()">🔓 啟動 HASH 比對</button>
-        <div id="hash-status">狀態：待機</div>
+            [測試] 模擬接收 HASH 光訊號
+
+        </button>
+
+        <button
+            id="hash-btn"
+            class="btn-sim"
+            onclick="toggleHashDetection()">
+
+            🔓 啟動 HASH 比對
+
+        </button>
+
+        <div id="hash-status">
+            狀態：待機
+        </div>
+
+        <div style="
+            font-size:10px;
+            color:#777;
+            margin-top:4px">
+
+            Optical: Red ROI / 2Hz　
+            HASH: 50ms/bit
+
+        </div>
+
     </div>
 
-    <div id="cv-status">OpenCV.js loading...</div>
+    <div id="cv-status">
+        OpenCV.js loading...
+    </div>
 
-    <!-- 載入 OpenCV.js -->
-    <script async src="https://docs.opencv.org/4.5.4/opencv.js" onload="onOpenCvReady();"></script>
+    <script
+        async
+        src="https://docs.opencv.org/4.5.4/opencv.js"
+        onload="onOpenCvReady();">
+    </script>
 
     <script>
-        // =========================================================================
-        // A. 除錯顯示 UI 控制 logic
-        // =========================================================================
-        const chkOptical = document.getElementById('chk-optical');
-        const chkHash    = document.getElementById('chk-hash');
-        const chkMicOn   = document.getElementById('chk-mic-on');
-        const chkMicOff  = document.getElementById('chk-mic-off');
+
+        // =========================================================
+        // A. Checklist
+        // =========================================================
+
+        const chkOptical =
+            document.getElementById('chk-optical');
+
+        const chkHash =
+            document.getElementById('chk-hash');
+
+        const chkMicOn =
+            document.getElementById('chk-mic-on');
+
+        const chkMicOff =
+            document.getElementById('chk-mic-off');
+
 
         function setCheckStatus(element, isChecked) {
-            const icon = element.querySelector('.icon');
+
+            const icon =
+                element.querySelector('.icon');
+
             if (isChecked) {
+
                 element.classList.add('checked');
+
                 icon.innerText = '✅';
+
             } else {
+
                 element.classList.remove('checked');
+
                 icon.innerText = '⬜';
             }
         }
 
-        // =========================================================================
+
+        // =========================================================
         // B. 基礎介面
-        // =========================================================================
-        const video = document.getElementById('video-preview');
-        const canvas = document.getElementById('stageCanvas');
-        const ctx = canvas.getContext('2d');
-        const shield = document.getElementById('shield-layer');
-        const speechLog = document.getElementById('speech-log');
-        const cvStatusTxt = document.getElementById('cv-status');
-        const analysisOverlay = document.getElementById('analysis-overlay');
-        const hashBtn = document.getElementById('hash-btn');
-        const hashStatusEl = document.getElementById('hash-status');
+        // =========================================================
+
+        const video =
+            document.getElementById('video-preview');
+
+        const canvas =
+            document.getElementById('stageCanvas');
+
+        const ctx =
+            canvas.getContext('2d');
+
+        const shield =
+            document.getElementById('shield-layer');
+
+        const speechLog =
+            document.getElementById('speech-log');
+
+        const cvStatusTxt =
+            document.getElementById('cv-status');
+
+        const analysisOverlay =
+            document.getElementById('analysis-overlay');
+
+        const hashBtn =
+            document.getElementById('hash-btn');
+
+        const hashStatusEl =
+            document.getElementById('hash-status');
+
 
         function resize() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
+
+            canvas.width =
+                window.innerWidth;
+
+            canvas.height =
+                window.innerHeight;
         }
-        window.addEventListener('resize', resize);
+
+
+        window.addEventListener(
+            'resize',
+            resize
+        );
+
         resize();
 
-        // [修正] OpenCV 就緒與 Video 就緒是兩條獨立的非同步流程，
-        // 必須「兩者都完成」才能安全啟動分析，否則 Mat 尺寸會是 0x0。
+
+        // =========================================================
+        // C. OpenCV / Video 初始化
+        // =========================================================
+
         let isOpenCvReady = false;
+
         let isVideoReady = false;
 
         function onOpenCvReady() {
-            cvStatusTxt.innerText = "OpenCV.js Ready.";
-            cvStatusTxt.style.color = "#81D8D0";
+
+            cvStatusTxt.innerText =
+                "OpenCV.js Ready.";
+
+            cvStatusTxt.style.color =
+                "#81D8D0";
+
             isOpenCvReady = true;
+
             tryStartAnalysis();
         }
 
+
         function tryStartAnalysis() {
-            if (isOpenCvReady && isVideoReady && !videoCapture) {
+
+            if (
+                isOpenCvReady &&
+                isVideoReady &&
+                !videoCapture
+            ) {
+
                 startOpticalAnalysis();
             }
         }
 
-        // =========================================================================
-        // C. 光學喚醒 (2Hz) 與 HASH 光通訊解調
-        // =========================================================================
-        // [修正] 韌體 HASH 位元時長已改為 100ms/bit，15fps(每張66ms)只能取到約1.5張/bit，
-        // 多數決容易被單張雜訊帶偏；拉高到 30fps(與 getUserMedia 要求的 frameRate 一致)，
-        // 可取到約 3 張/bit，多數決濾雜訊才可靠。（一般 2Hz 喚醒偵測用同一個幀率不受影響）
-        const ANALYSIS_FPS = 30;
-        let videoCapture = null;
-        let srcMat = null, grayMat = null;
-        const brightnessHistory = [];
-        const HISTORY_SIZE = ANALYSIS_FPS * 2;
 
-        navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, frameRate: 30 } })
+        // =========================================================
+        // D. 光學喚醒
+        // =========================================================
+
+        const ANALYSIS_FPS = 60;
+
+        let videoCapture = null;
+
+        let srcMat = null;
+
+        let grayMat = null;
+
+
+        const OPTICAL_CONFIG = {
+
+            MIN_RED: 70,
+
+            RED_DOMINANCE: 1.35,
+
+            ROI_MIN_SIZE: 12,
+
+            ROI_SIZE: 42,
+
+            ROI_PADDING: 18,
+
+            MIN_AMPLITUDE: 8,
+
+            REQUIRED_CYCLES: 3,
+
+            HISTORY_MS: 2200,
+
+            DEBUG_INTERVAL_MS: 250
+        };
+
+
+        const opticalHistory = [];
+
+        let ledRoi = null;
+
+        let lastLedCenter = null;
+
+        let lastOpticalDebugTime = 0;
+
+        let opticalTriggerLatchedUntil = 0;
+
+        const HISTORY_SIZE =
+            Math.ceil(
+                ANALYSIS_FPS * 2.2
+            );
+
+
+        navigator.mediaDevices
+            .getUserMedia({
+
+                video: {
+
+                    width: {
+                        ideal: 640
+                    },
+
+                    height: {
+                        ideal: 480
+                    },
+
+                    frameRate: {
+                        ideal: ANALYSIS_FPS,
+                        min: 30
+                    }
+                }
+            })
+
             .then(stream => {
+
                 video.srcObject = stream;
-                // [修正] 等 metadata 載入後才拿得到真正的 videoWidth/videoHeight，
-                // 並把它們寫回 video.width / video.height（IDL 屬性），
-                // 這樣 cv.VideoCapture 和 cv.Mat 才會用正確的尺寸建立。
+
                 video.onloadedmetadata = () => {
-                    video.width = video.videoWidth || 320;
-                    video.height = video.videoHeight || 240;
+
+                    video.width =
+                        video.videoWidth || 640;
+
+                    video.height =
+                        video.videoHeight || 480;
+
                     isVideoReady = true;
+
                     tryStartAnalysis();
                 };
             })
+
             .catch(err => {
-                console.error("Webcam存取失敗:", err);
-                cvStatusTxt.innerText = "攝影機存取失敗（請確認權限 / HTTPS）";
-                cvStatusTxt.style.color = "#f55";
+
+                console.error(
+                    "Webcam存取失敗:",
+                    err
+                );
+
+                cvStatusTxt.innerText =
+                    "攝影機存取失敗（請確認權限 / HTTPS）";
+
+                cvStatusTxt.style.color =
+                    "#f55";
             });
 
-        function startOpticalAnalysis() {
-            videoCapture = new cv.VideoCapture(video);
-            srcMat = new cv.Mat(video.height, video.width, cv.CV_8UC4);
-            grayMat = new cv.Mat(video.height, video.width, cv.CV_8UC1);
 
-            setInterval(processVideoFrame, 1000 / ANALYSIS_FPS);
+        function startOpticalAnalysis() {
+
+            videoCapture =
+                new cv.VideoCapture(video);
+
+            srcMat =
+                new cv.Mat(
+                    video.height,
+                    video.width,
+                    cv.CV_8UC4
+                );
+
+            grayMat =
+                new cv.Mat(
+                    video.height,
+                    video.width,
+                    cv.CV_8UC1
+                );
+
+            setInterval(
+                processVideoFrame,
+                1000 / ANALYSIS_FPS
+            );
         }
 
-        function processVideoFrame() {
-            if (!isOpenCvReady || !isVideoReady || video.paused || video.ended) return;
 
-            // [修正] 加上 try/catch，避免單一 frame 讀取失敗時
-            // setInterval 每次都拋錯洗版 console、甚至中斷偵測。
-            try {
-                videoCapture.read(srcMat);
-                cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
+        function clamp(
+            value,
+            min,
+            max
+        ) {
 
-                let mean = cv.mean(grayMat);
-                const now = Date.now();
-                brightnessHistory.push({ t: now, v: mean[0] });
-                if (brightnessHistory.length > HISTORY_SIZE) brightnessHistory.shift();
+            return Math.max(
+                min,
+                Math.min(max, value)
+            );
+        }
 
-                // [修正] HASH 訊號韌體端是用「純紅光」調變，灰階平均會被 G/B 權重稀釋
-                // (灰階公式紅色只佔約0.299)，改直接讀 srcMat 的 R 色版，訊噪比更好。
-                // srcMat 是 VideoCapture 從 canvas 讀出的 RGBA，channel 0 = R。
-                const srcMean = cv.mean(srcMat);
-                const redMean = srcMean[0];
 
-                // 若使用者已啟動 HASH 比對監聽，把這一幀的紅色色版亮度丟給 HASH 解調器
-                handleHashSample(redMean, now);
+        // =========================================================
+        // 找紅色 LED
+        // =========================================================
 
-                // 1. 檢測 2Hz 閃爍 (光學喚醒)
-                if (detect2HzFlicker()) {
-                    handleOpticalTrigger();
-                } else {
-                    // 如果未偵測到，取消 2Hz 打勾 (除非麥克風開啟中)
-                    if (!isVoicListenerActive) {
-                        setCheckStatus(chkOptical, false);
+        function findRedLedCenter() {
+
+            const width =
+                srcMat.cols;
+
+            const height =
+                srcMat.rows;
+
+            const data =
+                srcMat.data;
+
+            const step = 2;
+
+            let weightSum = 0;
+
+            let xSum = 0;
+
+            let ySum = 0;
+
+            let strongest = 0;
+
+
+            for (
+                let y = 0;
+                y < height;
+                y += step
+            ) {
+
+                for (
+                    let x = 0;
+                    x < width;
+                    x += step
+                ) {
+
+                    const idx =
+                        (y * width + x) * 4;
+
+                    const r =
+                        data[idx];
+
+                    const g =
+                        data[idx + 1];
+
+                    const b =
+                        data[idx + 2];
+
+
+                    const redExcess =
+                        r -
+                        Math.max(
+                            g * OPTICAL_CONFIG.RED_DOMINANCE,
+                            b * OPTICAL_CONFIG.RED_DOMINANCE
+                        );
+
+
+                    if (
+                        r >= OPTICAL_CONFIG.MIN_RED &&
+                        redExcess > 8
+                    ) {
+
+                        const weight =
+                            redExcess * redExcess;
+
+                        weightSum += weight;
+
+                        xSum +=
+                            x * weight;
+
+                        ySum +=
+                            y * weight;
+
+                        if (
+                            redExcess >
+                            strongest
+                        ) {
+
+                            strongest =
+                                redExcess;
+                        }
                     }
                 }
-            } catch (e) {
-                console.error("Frame 分析失敗:", e);
             }
+
+
+            if (
+                weightSum < 1 ||
+                strongest < 10
+            ) {
+
+                return null;
+            }
+
+
+            return {
+
+                x:
+                    xSum / weightSum,
+
+                y:
+                    ySum / weightSum
+            };
         }
 
-        function detect2HzFlicker() {
-            if (brightnessHistory.length < HISTORY_SIZE) return false;
-            let crossings = 0;
-            const sum = brightnessHistory.reduce((a, b) => a + b.v, 0);
-            const avg = sum / brightnessHistory.length;
 
-            for (let i = 1; i < brightnessHistory.length; i++) {
-                if ((brightnessHistory[i-1].v < avg && brightnessHistory[i].v >= avg) ||
-                    (brightnessHistory[i-1].v > avg && brightnessHistory[i].v <= avg)) {
-                    crossings++;
+        // =========================================================
+        // 更新 LED ROI
+        // =========================================================
+
+        function updateLedRoi(center) {
+
+            const width =
+                srcMat.cols;
+
+            const height =
+                srcMat.rows;
+
+            const size =
+                Math.max(
+                    OPTICAL_CONFIG.ROI_MIN_SIZE,
+                    OPTICAL_CONFIG.ROI_SIZE
+                );
+
+
+            if (!center) return;
+
+
+            const x =
+                Math.round(
+                    center.x - size / 2
+                );
+
+            const y =
+                Math.round(
+                    center.y - size / 2
+                );
+
+
+            const w =
+                Math.min(
+                    size,
+                    width
+                );
+
+            const h =
+                Math.min(
+                    size,
+                    height
+                );
+
+
+            ledRoi = {
+
+                x:
+                    clamp(
+                        x,
+                        0,
+                        Math.max(
+                            0,
+                            width - w
+                        )
+                    ),
+
+                y:
+                    clamp(
+                        y,
+                        0,
+                        Math.max(
+                            0,
+                            height - h
+                        )
+                    ),
+
+                w,
+
+                h
+            };
+
+
+            lastLedCenter =
+                center;
+        }
+
+
+        // =========================================================
+        // ROI 紅色訊號取樣
+        // =========================================================
+
+        function sampleRedRoi() {
+
+            if (!ledRoi)
+                return null;
+
+
+            const data =
+                srcMat.data;
+
+            const width =
+                srcMat.cols;
+
+
+            const {
+                x,
+                y,
+                w,
+                h
+            } = ledRoi;
+
+
+            let sumR = 0;
+
+            let sumG = 0;
+
+            let sumB = 0;
+
+            let count = 0;
+
+
+            for (
+                let yy = y;
+                yy < y + h;
+                yy += 2
+            ) {
+
+                for (
+                    let xx = x;
+                    xx < x + w;
+                    xx += 2
+                ) {
+
+                    const idx =
+                        (yy * width + xx) * 4;
+
+                    sumR +=
+                        data[idx];
+
+                    sumG +=
+                        data[idx + 1];
+
+                    sumB +=
+                        data[idx + 2];
+
+                    count++;
                 }
             }
 
-            if (crossings >= 6 && crossings <= 10) {
-                const maxB = Math.max(...brightnessHistory.map(h => h.v));
-                const minB = Math.min(...brightnessHistory.map(h => h.v));
-                if (maxB - minB > 30) return true;
-            }
-            return false;
+
+            if (!count)
+                return null;
+
+
+            return {
+
+                r:
+                    sumR / count,
+
+                g:
+                    sumG / count,
+
+                b:
+                    sumB / count
+            };
         }
 
-        // 當光學喚醒成功 (偵測到 2Hz 閃爍)
+
+        // =========================================================
+        // 光學時間序列
+        // =========================================================
+
+        function pushOpticalSample(
+            value,
+            now
+        ) {
+
+            opticalHistory.push({
+
+                t: now,
+
+                v: value
+            });
+
+
+            while (
+                opticalHistory.length &&
+                now -
+                opticalHistory[0].t >
+                OPTICAL_CONFIG.HISTORY_MS
+            ) {
+
+                opticalHistory.shift();
+            }
+
+
+            if (
+                opticalHistory.length >
+                HISTORY_SIZE
+            ) {
+
+                opticalHistory.shift();
+            }
+        }
+
+
+        // =========================================================
+        // 2Hz 判定
+        // =========================================================
+
+        function detect2HzFlicker() {
+
+            const now =
+                Date.now();
+
+
+            if (
+                opticalHistory.length < 45
+            ) {
+
+                return false;
+            }
+
+
+            const values =
+                opticalHistory.map(
+                    s => s.v
+                );
+
+
+            const sorted =
+                [...values].sort(
+                    (a, b) => a - b
+                );
+
+
+            const low =
+                sorted[
+                    Math.floor(
+                        sorted.length * 0.20
+                    )
+                ];
+
+
+            const high =
+                sorted[
+                    Math.floor(
+                        sorted.length * 0.80
+                    )
+                ];
+
+
+            const amplitude =
+                high - low;
+
+
+            if (
+                amplitude <
+                OPTICAL_CONFIG.MIN_AMPLITUDE
+            ) {
+
+                return false;
+            }
+
+
+            const threshold =
+                (high + low) / 2;
+
+
+            const crossings = [];
+
+
+            for (
+                let i = 1;
+                i < opticalHistory.length;
+                i++
+            ) {
+
+                const a =
+                    opticalHistory[i - 1];
+
+                const b =
+                    opticalHistory[i];
+
+
+                if (
+                    (
+                        a.v < threshold &&
+                        b.v >= threshold
+                    ) ||
+                    (
+                        a.v > threshold &&
+                        b.v <= threshold
+                    )
+                ) {
+
+                    crossings.push(b.t);
+                }
+            }
+
+
+            if (
+                crossings.length < 5
+            ) {
+
+                return false;
+            }
+
+
+            let validIntervals = 0;
+
+
+            for (
+                let i = 2;
+                i < crossings.length;
+                i++
+            ) {
+
+                const dt =
+                    crossings[i] -
+                    crossings[i - 2];
+
+
+                if (
+                    dt >= 350 &&
+                    dt <= 650
+                ) {
+
+                    validIntervals++;
+                }
+            }
+
+
+            const detected =
+                validIntervals >=
+                OPTICAL_CONFIG.REQUIRED_CYCLES &&
+                amplitude >=
+                OPTICAL_CONFIG.MIN_AMPLITUDE;
+
+
+            if (
+                now -
+                lastOpticalDebugTime >
+                OPTICAL_CONFIG.DEBUG_INTERVAL_MS
+            ) {
+
+                lastOpticalDebugTime =
+                    now;
+
+
+                analysisOverlay.innerText =
+                    `Optical: ${
+                        detected
+                            ? '2Hz DETECTED'
+                            : 'SCAN'
+                    } | R=${
+                        values[
+                            values.length - 1
+                        ].toFixed(0)
+                    } A=${
+                        amplitude.toFixed(0)
+                    }`;
+
+
+                analysisOverlay.style.color =
+                    detected
+                        ? '#ff0'
+                        : '#fff';
+            }
+
+
+            return detected;
+        }
+
+
+        // =========================================================
+        // Frame Processing
+        // =========================================================
+
+        function processVideoFrame() {
+
+            if (
+                !isOpenCvReady ||
+                !isVideoReady ||
+                video.paused ||
+                video.ended
+            ) {
+
+                return;
+            }
+
+
+            try {
+
+                videoCapture.read(
+                    srcMat
+                );
+
+
+                cv.cvtColor(
+                    srcMat,
+                    grayMat,
+                    cv.COLOR_RGBA2GRAY
+                );
+
+
+                const now =
+                    Date.now();
+
+
+                // LED 亮起時重新定位
+                const redCenter =
+                    findRedLedCenter();
+
+
+                if (redCenter) {
+
+                    updateLedRoi(
+                        redCenter
+                    );
+                }
+
+
+                // LED 熄滅時沿用上一個 ROI
+                const roiSample =
+                    sampleRedRoi();
+
+
+                if (roiSample) {
+
+                    const redSignal =
+                        roiSample.r -
+                        0.5 *
+                        (
+                            roiSample.g +
+                            roiSample.b
+                        );
+
+
+                    pushOpticalSample(
+                        redSignal,
+                        now
+                    );
+
+
+                    handleHashSample(
+                        redSignal,
+                        now
+                    );
+                }
+
+
+                if (
+                    detect2HzFlicker()
+                ) {
+
+                    if (
+                        now >=
+                        opticalTriggerLatchedUntil
+                    ) {
+
+                        opticalTriggerLatchedUntil =
+                            now + 1200;
+
+                        handleOpticalTrigger();
+                    }
+
+                }
+                else if (
+                    !isVoicListenerActive &&
+                    now >=
+                    opticalTriggerLatchedUntil
+                ) {
+
+                    setCheckStatus(
+                        chkOptical,
+                        false
+                    );
+                }
+
+            }
+            catch (e) {
+
+                console.error(
+                    'Frame 分析失敗:',
+                    e
+                );
+            }
+        }
+
+
+        // =========================================================
+        // E. 光學喚醒成功
+        // =========================================================
+
         function handleOpticalTrigger() {
-            analysisOverlay.innerText = "Optical: DETECTED 2Hz";
-            analysisOverlay.style.color = "#ff0";
 
-            // 項目 1 打勾：光學喚醒 2Hz
-            setCheckStatus(chkOptical, true);
+            analysisOverlay.innerText =
+                "Optical: DETECTED 2Hz";
 
-            // 光學觸發後，啟用麥克風監聽
+            analysisOverlay.style.color =
+                "#ff0";
+
+
+            setCheckStatus(
+                chkOptical,
+                true
+            );
+
+
             enableVoiceListener();
         }
 
-        // =========================================================================
-        // D. HASH 比對與呼吸燈觸發
-        // =========================================================================
-        function triggerRedBreathing() {
-            // 項目 2 打勾：比對 HASH
-            setCheckStatus(chkHash, true);
 
-            document.body.classList.add('breathing-red');
+        // =========================================================
+        // F. HASH 成功動畫
+        // =========================================================
+
+        function triggerRedBreathing() {
+
+            setCheckStatus(
+                chkHash,
+                true
+            );
+
+
+            document.body.classList.add(
+                'breathing-red'
+            );
+
 
             setTimeout(() => {
-                document.body.classList.remove('breathing-red');
-                setCheckStatus(chkHash, false); // 復原後取消打勾
+
+                document.body.classList.remove(
+                    'breathing-red'
+                );
+
+                setCheckStatus(
+                    chkHash,
+                    false
+                );
+
             }, 5000);
         }
 
+
         function simulateHashDetect() {
+
             triggerRedBreathing();
         }
 
-        // =========================================================================
-        // D-2. HASH 光學解調協定 (OOK / On-Off Keying)
+
+        // =========================================================
+        // G. HASH 光學解調
         //
-        // 已對照 firmware_double_longpress_hash.ino 實際規格調整：
-        //   [ 6 個半週期的前導閃爍 SYNC_PATTERN，對應韌體「快速閃爍3次」 ]
-        //   + [ 128-bit 資料，對應韌體 16 個 ASCII 字元（每字元 8-bit，MSB-first）]
-        // 韌體端前導脈衝與資料位元已統一使用 HASH_BIT_DURATION_MS(100ms) 同一個時脈，
-        // 網頁端用「滑動視窗」持續解出 bit，一旦視窗前段比對到同步碼，
-        // 就把後面 128 bit 依 8-bit 一組還原成 ASCII 字元，跟 EXPECTED_HASH 字串比對。
-        // =========================================================================
+        // 與韌體完全同步：
+        //
+        // Header:
+        // 1 = 50ms 紅燈
+        // 0 = 50ms 熄滅
+        // 重複 3 次
+        //
+        // Payload:
+        // 16 bytes
+        // 128 bits
+        // MSB first
+        // 50ms / bit
+        // =========================================================
+
         const HASH_CONFIG = {
-            BIT_DURATION_MS: 100,              // 對應韌體 HASH_BIT_DURATION_MS，須保持一致
-            SYNC_PATTERN: [1, 0, 1, 0, 1, 0],  // 對應韌體「ON 40ms→OFF 40ms 共3次」的節奏(6個半週期)
-            PAYLOAD_BITS: 128,                 // 16 個 ASCII 字元 × 8 bits
-            EXPECTED_HASH: "A1B2C3D4E5F67890", // 對應韌體 HASH_CODE 字串（非16進位運算值，是明碼字串）
-            LISTEN_TIMEOUT_MS: 20000,          // 監聽逾時：前導(0.6s)+資料(12.8s)≈13.4s，抓20s留餘裕
-            THRESHOLD_MARGIN: 30               // 紅色色版是滿幅0↔255切換，訊噪比佳，可用較高門檻抗雜訊
+
+            BIT_DURATION_MS:
+                50,
+
+            HEADER_HALF_MS:
+                50,
+
+            HEADER_PULSES:
+                3,
+
+            SYNC_PATTERN:
+                [
+                    1,
+                    0,
+                    1,
+                    0,
+                    1,
+                    0
+                ],
+
+            PAYLOAD_BITS:
+                128,
+
+            EXPECTED_HASH:
+                'A1B2C3D4E5F67890',
+
+            LISTEN_TIMEOUT_MS:
+                10000,
+
+            THRESHOLD_MARGIN:
+                8,
+
+            BASELINE_ALPHA:
+                0.03
         };
-        const HASH_TOTAL_BITS = HASH_CONFIG.SYNC_PATTERN.length + HASH_CONFIG.PAYLOAD_BITS;
+
+
+        const HASH_TOTAL_BITS =
+            HASH_CONFIG.SYNC_PATTERN.length +
+            HASH_CONFIG.PAYLOAD_BITS;
+
 
         let isHashListening = false;
+
         let hashListenStartTime = 0;
-        let hashBaseline = null;           // 動態基準亮度（跟隨環境光緩慢調整）
-        const BASELINE_ALPHA = 0.02;
 
-        let currentBitSamples = [];        // 目前這個 bit 週期內收集到的原始樣本
+        let hashBaseline = null;
+
+        let currentBitSamples = [];
+
         let currentBitStartTime = 0;
-        let decodedBitStream = [];         // 已解出的 bit（滑動視窗，長度上限 HASH_TOTAL_BITS）
 
-        // 每一幀呼叫一次：只有在 isHashListening 時才會實際處理
-        function handleHashSample(meanBrightness, now) {
-            if (!isHashListening) return;
+        let decodedBitStream = [];
 
-            // 動態基準線：緩慢跟隨環境光平均亮度，避免長時間監聽時因環境光變化誤判
-            if (hashBaseline === null) hashBaseline = meanBrightness;
-            hashBaseline = hashBaseline * (1 - BASELINE_ALPHA) + meanBrightness * BASELINE_ALPHA;
 
-            const bitLevel =
-                meanBrightness > hashBaseline + HASH_CONFIG.THRESHOLD_MARGIN ? 1 :
-                meanBrightness < hashBaseline - HASH_CONFIG.THRESHOLD_MARGIN ? 0 :
-                null; // 落在基準線附近視為雜訊，不採計
+        function handleHashSample(
+            signal,
+            now
+        ) {
 
-            if (currentBitStartTime === 0) currentBitStartTime = now;
-            if (bitLevel !== null) currentBitSamples.push(bitLevel);
+            if (!isHashListening)
+                return;
 
-            // 一個 bit 週期結束時，用多數決判斷這個 bit 是 0 還是 1
-            if (now - currentBitStartTime >= HASH_CONFIG.BIT_DURATION_MS) {
-                if (currentBitSamples.length > 0) {
-                    const ones = currentBitSamples.filter(b => b === 1).length;
-                    const bit = ones > currentBitSamples.length / 2 ? 1 : 0;
-                    pushDecodedBit(bit);
-                }
-                currentBitSamples = [];
-                currentBitStartTime = now;
+
+            if (
+                hashBaseline === null
+            ) {
+
+                hashBaseline =
+                    signal;
             }
 
-            // 監聽逾時
-            if (now - hashListenStartTime > HASH_CONFIG.LISTEN_TIMEOUT_MS) {
-                stopHashListening('timeout');
+
+            hashBaseline =
+                hashBaseline *
+                (
+                    1 -
+                    HASH_CONFIG.BASELINE_ALPHA
+                ) +
+                signal *
+                HASH_CONFIG.BASELINE_ALPHA;
+
+
+            const bitLevel =
+                signal >
+                hashBaseline +
+                HASH_CONFIG.THRESHOLD_MARGIN
+                    ? 1
+
+                    : signal <
+                      hashBaseline -
+                      HASH_CONFIG.THRESHOLD_MARGIN
+                        ? 0
+
+                        : null;
+
+
+            if (
+                currentBitStartTime === 0
+            ) {
+
+                currentBitStartTime =
+                    now;
+            }
+
+
+            if (
+                bitLevel !== null
+            ) {
+
+                currentBitSamples.push(
+                    bitLevel
+                );
+            }
+
+
+            while (
+                now -
+                currentBitStartTime >=
+                HASH_CONFIG.BIT_DURATION_MS
+            ) {
+
+                if (
+                    currentBitSamples.length > 0
+                ) {
+
+                    const ones =
+                        currentBitSamples.filter(
+                            b => b === 1
+                        ).length;
+
+
+                    const bit =
+                        ones >=
+                        currentBitSamples.length / 2
+                            ? 1
+                            : 0;
+
+
+                    pushDecodedBit(
+                        bit
+                    );
+                }
+
+
+                currentBitSamples = [];
+
+
+                currentBitStartTime +=
+                    HASH_CONFIG.BIT_DURATION_MS;
+            }
+
+
+            if (
+                now -
+                hashListenStartTime >
+                HASH_CONFIG.LISTEN_TIMEOUT_MS
+            ) {
+
+                stopHashListening(
+                    'timeout'
+                );
             }
         }
 
+
         function pushDecodedBit(bit) {
-            decodedBitStream.push(bit);
-            if (decodedBitStream.length > HASH_TOTAL_BITS) decodedBitStream.shift();
-            if (decodedBitStream.length === HASH_TOTAL_BITS) {
+
+            decodedBitStream.push(
+                bit
+            );
+
+
+            if (
+                decodedBitStream.length >
+                HASH_TOTAL_BITS
+            ) {
+
+                decodedBitStream.shift();
+            }
+
+
+            if (
+                decodedBitStream.length ===
+                HASH_TOTAL_BITS
+            ) {
+
                 tryMatchHash();
             }
         }
 
+
         function tryMatchHash() {
-            const syncLen = HASH_CONFIG.SYNC_PATTERN.length;
-            const candidateSync = decodedBitStream.slice(0, syncLen);
-            const isSyncMatch = candidateSync.every((b, i) => b === HASH_CONFIG.SYNC_PATTERN[i]);
 
-            if (!isSyncMatch) return; // 同步碼沒對齊，繼續等下一個 bit 滑進視窗
+            const syncLen =
+                HASH_CONFIG.SYNC_PATTERN.length;
 
-            const payloadBits = decodedBitStream.slice(syncLen);
-            const decodedString = bitsToAscii(payloadBits);
-            hashStatusEl.innerText = `狀態：偵測到訊號，解碼值 ${decodedString}`;
 
-            if (decodedString === HASH_CONFIG.EXPECTED_HASH) {
-                onHashMatchSuccess(decodedString);
+            const candidateSync =
+                decodedBitStream.slice(
+                    0,
+                    syncLen
+                );
+
+
+            const isSyncMatch =
+                candidateSync.every(
+                    (b, i) =>
+                        b ===
+                        HASH_CONFIG.SYNC_PATTERN[i]
+                );
+
+
+            if (!isSyncMatch)
+                return;
+
+
+            const payloadBits =
+                decodedBitStream.slice(
+                    syncLen
+                );
+
+
+            const decodedString =
+                bitsToAscii(
+                    payloadBits
+                );
+
+
+            hashStatusEl.innerText =
+                `狀態：偵測到訊號，解碼值 ${decodedString}`;
+
+
+            if (
+                decodedString ===
+                HASH_CONFIG.EXPECTED_HASH
+            ) {
+
+                onHashMatchSuccess(
+                    decodedString
+                );
+
             }
-            // 不論成功與否都清空緩衝，避免同一段訊號重複觸發判定
+            else {
+
+                hashStatusEl.innerText =
+                    `狀態：HASH 不符 ❌ (${decodedString})`;
+            }
+
+
             decodedBitStream = [];
         }
 
-        // 8-bit 一組還原成 ASCII 字元（對應韌體 MSB-first 的 8-bit 字元編碼）
+
         function bitsToAscii(bits) {
+
             let str = '';
-            for (let i = 0; i < bits.length; i += 8) {
-                const byteBits = bits.slice(i, i + 8);
-                const value = byteBits.reduce((acc, b) => (acc << 1) | b, 0);
-                str += String.fromCharCode(value);
+
+
+            for (
+                let i = 0;
+                i < bits.length;
+                i += 8
+            ) {
+
+                const byteBits =
+                    bits.slice(
+                        i,
+                        i + 8
+                    );
+
+
+                if (
+                    byteBits.length < 8
+                ) {
+
+                    break;
+                }
+
+
+                const value =
+                    byteBits.reduce(
+                        (acc, b) =>
+                            (acc << 1) | b,
+                        0
+                    );
+
+
+                str +=
+                    String.fromCharCode(
+                        value
+                    );
             }
+
+
             return str;
         }
 
-        function onHashMatchSuccess(decodedString) {
-            hashStatusEl.innerText = `狀態：比對成功 ✅ (HASH=${decodedString})`;
-            triggerRedBreathing(); // 沿用原本效果：打勾項目2、紅色呼吸燈 5 秒後自動復原
-            stopHashListening('success');
+
+        function onHashMatchSuccess(
+            decodedString
+        ) {
+
+            hashStatusEl.innerText =
+                `狀態：比對成功 ✅ (HASH=${decodedString})`;
+
+
+            triggerRedBreathing();
+
+
+            stopHashListening(
+                'success'
+            );
         }
 
+
         function toggleHashDetection() {
-            if (isHashListening) {
-                stopHashListening('manual');
-            } else {
+
+            if (
+                isHashListening
+            ) {
+
+                stopHashListening(
+                    'manual'
+                );
+
+            }
+            else {
+
                 startHashListening();
             }
         }
 
+
         function startHashListening() {
-            isHashListening = true;
-            hashListenStartTime = Date.now();
-            hashBaseline = null;
-            currentBitSamples = [];
-            currentBitStartTime = 0;
-            decodedBitStream = [];
 
-            hashBtn.innerText = '⏹ 停止 HASH 偵測';
-            hashBtn.classList.add('active');
-            hashStatusEl.innerText = '狀態：監聽中...';
+            isHashListening =
+                true;
+
+
+            hashListenStartTime =
+                Date.now();
+
+
+            hashBaseline =
+                null;
+
+
+            currentBitSamples =
+                [];
+
+
+            currentBitStartTime =
+                0;
+
+
+            decodedBitStream =
+                [];
+
+
+            hashBtn.innerText =
+                '⏹ 停止 HASH 偵測';
+
+
+            hashBtn.classList.add(
+                'active'
+            );
+
+
+            hashStatusEl.innerText =
+                '狀態：監聽中... 50ms/bit';
         }
 
-        function stopHashListening(reason) {
-            isHashListening = false;
-            hashBtn.innerText = '🔓 啟動 HASH 比對';
-            hashBtn.classList.remove('active');
 
-            if (reason === 'timeout') {
-                hashStatusEl.innerText = '狀態：監聽逾時 ❌，請重新嘗試';
-            } else if (reason === 'manual') {
-                hashStatusEl.innerText = '狀態：已手動停止';
+        function stopHashListening(
+            reason
+        ) {
+
+            isHashListening =
+                false;
+
+
+            hashBtn.innerText =
+                '🔓 啟動 HASH 比對';
+
+
+            hashBtn.classList.remove(
+                'active'
+            );
+
+
+            if (
+                reason === 'timeout'
+            ) {
+
+                hashStatusEl.innerText =
+                    '狀態：監聽逾時 ❌，請重新嘗試';
+
             }
-            // reason === 'success' 的文字已在 onHashMatchSuccess 設定，這裡不覆蓋
+            else if (
+                reason === 'manual'
+            ) {
+
+                hashStatusEl.innerText =
+                    '狀態：已手動停止';
+            }
         }
 
-        // =========================================================================
-        // E. 麥克風開關控制 (項目 3 與 項目 4)
-        // =========================================================================
-        let isVoicListenerActive = false;
-        let voicDisableTimer = null;
-        const VOIC_LISTEN_DURATION = 8000; // 8 秒自動關閉
+
+        // =========================================================
+        // H. 麥克風
+        // =========================================================
+
+        let isVoicListenerActive =
+            false;
+
+        let voicDisableTimer =
+            null;
+
+        const VOIC_LISTEN_DURATION =
+            8000;
+
 
         function enableVoiceListener() {
-            if (isVoicListenerActive) {
+
+            if (
+                isVoicListenerActive
+            ) {
+
                 resetVoiceDisableTimer();
+
                 return;
             }
 
-            isVoicListenerActive = true;
 
-            // 更新除錯 Checklist：項目 3 打勾，項目 4 取消勾選
-            setCheckStatus(chkMicOn, true);
-            setCheckStatus(chkMicOff, false);
+            isVoicListenerActive =
+                true;
+
+
+            setCheckStatus(
+                chkMicOn,
+                true
+            );
+
+
+            setCheckStatus(
+                chkMicOff,
+                false
+            );
+
 
             if (recognition) {
-                try { recognition.start(); } catch(e) {}
+
+                try {
+
+                    recognition.start();
+
+                }
+                catch (e) {}
             }
+
 
             resetVoiceDisableTimer();
         }
+
 
         function disableVoiceListener() {
-            if (!isVoicListenerActive) return;
 
-            isVoicListenerActive = false;
+            if (
+                !isVoicListenerActive
+            ) {
 
-            // 更新除錯 Checklist：項目 3 取消勾選，項目 4 打勾
-            setCheckStatus(chkMicOn, false);
-            setCheckStatus(chkMicOff, true);
-            setCheckStatus(chkOptical, false); // 關閉麥克風時順便復原光學觸發狀態
+                return;
+            }
+
+
+            isVoicListenerActive =
+                false;
+
+
+            setCheckStatus(
+                chkMicOn,
+                false
+            );
+
+
+            setCheckStatus(
+                chkMicOff,
+                true
+            );
+
+
+            setCheckStatus(
+                chkOptical,
+                false
+            );
+
 
             if (recognition) {
-                try { recognition.stop(); } catch(e) {}
+
+                try {
+
+                    recognition.stop();
+
+                }
+                catch (e) {}
             }
 
-            analysisOverlay.innerText = "Optical: IDLE";
-            analysisOverlay.style.color = "#fff";
+
+            analysisOverlay.innerText =
+                "Optical: IDLE";
+
+
+            analysisOverlay.style.color =
+                "#fff";
         }
+
 
         function resetVoiceDisableTimer() {
-            clearTimeout(voicDisableTimer);
-            voicDisableTimer = setTimeout(disableVoiceListener, VOIC_LISTEN_DURATION);
+
+            clearTimeout(
+                voicDisableTimer
+            );
+
+
+            voicDisableTimer =
+                setTimeout(
+                    disableVoiceListener,
+                    VOIC_LISTEN_DURATION
+                );
         }
 
-        // =========================================================================
-        // F. 跨口音語音魔法與 Web Speech API
-        // =========================================================================
+
+        // =========================================================
+        // I. Asclepius 動畫
+        // =========================================================
+
         let totemAnimation = null;
+
+
         function triggerAsclepiusEffect() {
-            shield.classList.add('shield-active');
+
+            shield.classList.add(
+                'shield-active'
+            );
+
+
             startTotemAnimation();
+
+
             resetVoiceDisableTimer();
 
-            setTimeout(() => { shield.classList.remove('shield-active'); }, 5000);
+
+            setTimeout(() => {
+
+                shield.classList.remove(
+                    'shield-active'
+                );
+
+            }, 5000);
         }
+
 
         function startTotemAnimation() {
-            let startY = canvas.height + 150;
-            let targetY = canvas.height / 2;
-            let currentY = startY;
-            let state = 'ENTER';
-            let holdStartTime = 0;
 
-            function drawStaff(x, y, alpha) {
-                ctx.save(); ctx.translate(x, y); ctx.globalAlpha = alpha;
-                ctx.strokeStyle = '#81D8D0'; ctx.fillStyle = '#81D8D0';
-                ctx.shadowColor = '#81D8D0'; ctx.shadowBlur = 25; ctx.lineWidth = 8;
-                ctx.beginPath(); ctx.moveTo(0, -100); ctx.lineTo(0, 100); ctx.stroke();
-                ctx.beginPath(); ctx.arc(0, -100, 12, 0, Math.PI * 2); ctx.fill();
+            let startY =
+                canvas.height + 150;
+
+            let targetY =
+                canvas.height / 2;
+
+            let currentY =
+                startY;
+
+            let state =
+                'ENTER';
+
+            let holdStartTime =
+                0;
+
+
+            function drawStaff(
+                x,
+                y,
+                alpha
+            ) {
+
+                ctx.save();
+
+                ctx.translate(
+                    x,
+                    y
+                );
+
+                ctx.globalAlpha =
+                    alpha;
+
+                ctx.strokeStyle =
+                    '#81D8D0';
+
+                ctx.fillStyle =
+                    '#81D8D0';
+
+                ctx.shadowColor =
+                    '#81D8D0';
+
+                ctx.shadowBlur =
+                    25;
+
+                ctx.lineWidth =
+                    8;
+
+
                 ctx.beginPath();
-                for (let t = -90; t <= 90; t += 5) {
-                    let curveX = Math.sin(t * 0.08) * 35;
-                    if (t === -90) ctx.moveTo(curveX, t); else ctx.lineTo(curveX, t);
+
+                ctx.moveTo(
+                    0,
+                    -100
+                );
+
+                ctx.lineTo(
+                    0,
+                    100
+                );
+
+                ctx.stroke();
+
+
+                ctx.beginPath();
+
+                ctx.arc(
+                    0,
+                    -100,
+                    12,
+                    0,
+                    Math.PI * 2
+                );
+
+                ctx.fill();
+
+
+                ctx.beginPath();
+
+                for (
+                    let t = -90;
+                    t <= 90;
+                    t += 5
+                ) {
+
+                    let curveX =
+                        Math.sin(
+                            t * 0.08
+                        ) * 35;
+
+
+                    if (
+                        t === -90
+                    ) {
+
+                        ctx.moveTo(
+                            curveX,
+                            t
+                        );
+
+                    }
+                    else {
+
+                        ctx.lineTo(
+                            curveX,
+                            t
+                        );
+                    }
                 }
-                ctx.stroke(); ctx.restore();
+
+                ctx.stroke();
+
+                ctx.restore();
             }
+
 
             function animate(timestamp) {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                if (state === 'ENTER') {
-                    currentY += (targetY - currentY) * 0.12;
-                    if (Math.abs(currentY - targetY) < 3) { currentY = targetY; state = 'HOLD'; holdStartTime = timestamp; }
-                } else if (state === 'HOLD') {
-                    if (timestamp - holdStartTime > 500) { state = 'EXIT'; }
-                } else if (state === 'EXIT') {
-                    currentY -= 35; if (currentY < -150) state = 'DONE';
+
+                ctx.clearRect(
+                    0,
+                    0,
+                    canvas.width,
+                    canvas.height
+                );
+
+
+                if (
+                    state === 'ENTER'
+                ) {
+
+                    currentY +=
+                        (
+                            targetY -
+                            currentY
+                        ) * 0.12;
+
+
+                    if (
+                        Math.abs(
+                            currentY -
+                            targetY
+                        ) < 3
+                    ) {
+
+                        currentY =
+                            targetY;
+
+                        state =
+                            'HOLD';
+
+                        holdStartTime =
+                            timestamp;
+                    }
+
                 }
-                if (state !== 'DONE') { drawStaff(canvas.width / 2, currentY, 0.75); totemAnimation = requestAnimationFrame(animate); }
+                else if (
+                    state === 'HOLD'
+                ) {
+
+                    if (
+                        timestamp -
+                        holdStartTime >
+                        500
+                    ) {
+
+                        state =
+                            'EXIT';
+                    }
+
+                }
+                else if (
+                    state === 'EXIT'
+                ) {
+
+                    currentY -= 35;
+
+
+                    if (
+                        currentY < -150
+                    ) {
+
+                        state =
+                            'DONE';
+                    }
+                }
+
+
+                if (
+                    state !== 'DONE'
+                ) {
+
+                    drawStaff(
+                        canvas.width / 2,
+                        currentY,
+                        0.75
+                    );
+
+
+                    totemAnimation =
+                        requestAnimationFrame(
+                            animate
+                        );
+                }
             }
-            if (totemAnimation) cancelAnimationFrame(totemAnimation);
-            totemAnimation = requestAnimationFrame(animate);
+
+
+            if (
+                totemAnimation
+            ) {
+
+                cancelAnimationFrame(
+                    totemAnimation
+                );
+            }
+
+
+            totemAnimation =
+                requestAnimationFrame(
+                    animate
+                );
         }
 
-        // 模糊比對
-        function calculateLevenshteinDistance(a, b) {
-            const matrix = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0) );
-            for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
-            for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
-            for (let i = 1; i <= a.length; i++) {
-                for (let j = 1; j <= b.length; j++) {
-                    const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-                    matrix[i][j] = Math.min( matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost );
+
+        // =========================================================
+        // J. 語音模糊比對
+        // =========================================================
+
+        function calculateLevenshteinDistance(
+            a,
+            b
+        ) {
+
+            const matrix =
+                Array.from(
+                    {
+                        length:
+                            a.length + 1
+                    },
+                    () =>
+                        Array(
+                            b.length + 1
+                        ).fill(0)
+                );
+
+
+            for (
+                let i = 0;
+                i <= a.length;
+                i++
+            ) {
+
+                matrix[i][0] =
+                    i;
+            }
+
+
+            for (
+                let j = 0;
+                j <= b.length;
+                j++
+            ) {
+
+                matrix[0][j] =
+                    j;
+            }
+
+
+            for (
+                let i = 1;
+                i <= a.length;
+                i++
+            ) {
+
+                for (
+                    let j = 1;
+                    j <= b.length;
+                    j++
+                ) {
+
+                    const cost =
+                        a[i - 1] ===
+                        b[j - 1]
+                            ? 0
+                            : 1;
+
+
+                    matrix[i][j] =
+                        Math.min(
+
+                            matrix[i - 1][j] + 1,
+
+                            matrix[i][j - 1] + 1,
+
+                            matrix[i - 1][j - 1] +
+                                cost
+                        );
                 }
             }
-            return matrix[a.length][b.length];
+
+
+            return matrix[
+                a.length
+            ][
+                b.length
+            ];
         }
-        function getSimilarity(str1, str2) {
-            const distance = calculateLevenshteinDistance(str1, str2);
-            const maxLength = Math.max(str1.length, str2.length);
-            if (maxLength === 0) return 1.0; return (1.0 - distance / maxLength);
+
+
+        function getSimilarity(
+            str1,
+            str2
+        ) {
+
+            const distance =
+                calculateLevenshteinDistance(
+                    str1,
+                    str2
+                );
+
+
+            const maxLength =
+                Math.max(
+                    str1.length,
+                    str2.length
+                );
+
+
+            if (
+                maxLength === 0
+            ) {
+
+                return 1.0;
+            }
+
+
+            return (
+                1.0 -
+                distance / maxLength
+            );
         }
+
 
         const SPELL_DATABASE = {
+
             "asclepius": {
-                aliases: ["asclepius", "asclepios", "esclepius", "ask lepius", "ass clepius", "usclepius", "asklepios"],
-                action: triggerAsclepiusEffect
+
+                aliases: [
+
+                    "asclepius",
+                    "asclepios",
+                    "esclepius",
+                    "ask lepius",
+                    "ass clepius",
+                    "usclepius",
+                    "asklepios"
+                ],
+
+                action:
+                    triggerAsclepiusEffect
             }
         };
 
-        function evaluateSpellVoice(spokenText) {
-            const cleanInput = spokenText.trim().toLowerCase();
-            const SIMILARITY_THRESHOLD = 0.65;
-            for (const [spellName, config] of Object.entries(SPELL_DATABASE)) {
-                const mainScore = getSimilarity(cleanInput, spellName);
-                if (mainScore >= SIMILARITY_THRESHOLD) { config.action(); return true; }
-                for (const alias of config.aliases) {
-                    if (cleanInput.includes(alias) || getSimilarity(cleanInput, alias) >= SIMILARITY_THRESHOLD) {
-                        config.action(); return true;
+
+        function evaluateSpellVoice(
+            spokenText
+        ) {
+
+            const cleanInput =
+                spokenText
+                    .trim()
+                    .toLowerCase();
+
+
+            const SIMILARITY_THRESHOLD =
+                0.65;
+
+
+            for (
+                const [
+                    spellName,
+                    config
+                ]
+                of Object.entries(
+                    SPELL_DATABASE
+                )
+            ) {
+
+                const mainScore =
+                    getSimilarity(
+                        cleanInput,
+                        spellName
+                    );
+
+
+                if (
+                    mainScore >=
+                    SIMILARITY_THRESHOLD
+                ) {
+
+                    config.action();
+
+                    return true;
+                }
+
+
+                for (
+                    const alias
+                    of config.aliases
+                ) {
+
+                    if (
+                        cleanInput.includes(
+                            alias
+                        ) ||
+                        getSimilarity(
+                            cleanInput,
+                            alias
+                        ) >=
+                        SIMILARITY_THRESHOLD
+                    ) {
+
+                        config.action();
+
+                        return true;
                     }
                 }
             }
+
+
             return false;
         }
 
-        // Web Speech API
-        let recognition = null;
-        if ('webkitSpeechRecognition' in window) {
-            recognition = new webkitSpeechRecognition();
-            recognition.continuous = true;
-            recognition.interimResults = false;
-            recognition.lang = 'en-US';
 
-            recognition.onresult = (event) => {
-                const transcript = event.results[event.results.length - 1][0].transcript;
-                speechLog.innerText = transcript;
-                evaluateSpellVoice(transcript);
-            };
+        // =========================================================
+        // K. Web Speech API
+        // =========================================================
 
-            recognition.onerror = (e) => { if (e.error !== 'no-speech') console.log('Speech Error:', e.error); };
-            recognition.onend = () => {
-                // [修正] 這裡原本沒有 try/catch，若與其他 start() 呼叫時序撞在一起
-                // 會拋出 InvalidStateError，導致語音辨識整個停擺。
-                if (isVoicListenerActive) {
-                    try { recognition.start(); } catch(e) {}
-                }
-            };
-        } else {
-            console.warn('此瀏覽器不支援 webkitSpeechRecognition（建議使用 Chrome）。');
+        let recognition =
+            null;
+
+
+        if (
+            'webkitSpeechRecognition'
+            in window
+        ) {
+
+            recognition =
+                new webkitSpeechRecognition();
+
+
+            recognition.continuous =
+                true;
+
+            recognition.interimResults =
+                false;
+
+            recognition.lang =
+                'en-US';
+
+
+            recognition.onresult =
+                (event) => {
+
+                    const transcript =
+                        event.results[
+                            event.results.length - 1
+                        ][0].transcript;
+
+
+                    speechLog.innerText =
+                        transcript;
+
+
+                    evaluateSpellVoice(
+                        transcript
+                    );
+                };
+
+
+            recognition.onerror =
+                (e) => {
+
+                    if (
+                        e.error !==
+                        'no-speech'
+                    ) {
+
+                        console.log(
+                            'Speech Error:',
+                            e.error
+                        );
+                    }
+                };
+
+
+            recognition.onend =
+                () => {
+
+                    if (
+                        isVoicListenerActive
+                    ) {
+
+                        try {
+
+                            recognition.start();
+
+                        }
+                        catch (e) {}
+                    }
+                };
+
+        }
+        else {
+
+            console.warn(
+                '此瀏覽器不支援 webkitSpeechRecognition（建議使用 Chrome）。'
+            );
         }
 
-        // [新增] 頁面卸載時釋放 OpenCV Mat，避免 WASM 記憶體洩漏
-        window.addEventListener('beforeunload', () => {
-            if (srcMat) srcMat.delete();
-            if (grayMat) grayMat.delete();
-        });
+
+        // =========================================================
+        // L. 資源釋放
+        // =========================================================
+
+        window.addEventListener(
+            'beforeunload',
+            () => {
+
+                if (srcMat) {
+
+                    srcMat.delete();
+                }
+
+
+                if (grayMat) {
+
+                    grayMat.delete();
+                }
+            }
+        );
+
     </script>
+
 </body>
 </html>
