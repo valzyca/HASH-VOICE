@@ -127,7 +127,7 @@
     <div id="ui-info">
         <h1>TEST HASH+VOICE</h1>
         <div id="version-tag" style="font-size:11px; color:#888; margin:-6px 0 8px 0; font-family:monospace;">
-            v9 · LED定位追蹤(遠距離修正) · 2026-08-14
+            v10 · 加權紅色重心定位+嚴謹2Hz判定 · 2026-08-14
         </div>
         <p style="margin: 0; font-size: 13px; color: #ccc;">系統狀態監視面板</p>
 
@@ -230,16 +230,49 @@
         // =========================================================================
         // C. 光學喚醒 (2Hz) 與 HASH 光通訊解調
         // =========================================================================
-        // [修正] 韌體 HASH 位元時長已改為 100ms/bit，15fps(每張66ms)只能取到約1.5張/bit，
-        // 多數決容易被單張雜訊帶偏；拉高到 30fps(與 getUserMedia 要求的 frameRate 一致)，
-        // 可取到約 3 張/bit，多數決濾雜訊才可靠。（一般 2Hz 喚醒偵測用同一個幀率不受影響）
-        const ANALYSIS_FPS = 30;
+        // [修正] 參考較穩定的實作版本，改用「加權紅色重心」定位 LED，取代單純找最亮點。
+        // 原本用 cv.minMaxLoc 找「最亮的紅色數值」，遇到房間裡的白光/其他亮光源會誤判——
+        // 白光的 R 值通常也很高，minMaxLoc 只看亮度、不看「是不是真的紅色」。
+        // 改成計算每個像素的「紅色優勢度」(redExcess = R - 綠藍分量*1.35)，
+        // 只有明顯偏紅的像素才列入計算，並用 redExcess² 加權平均出中心點——
+        // 對遠距離、只剩幾個像素大小的 LED 更穩定，也更不會被白光騙走定位。
+        const ANALYSIS_FPS = 60;
         let videoCapture = null;
-        let srcMat = null, grayMat = null, rChannelMat = null;
-        const brightnessHistory = [];
-        const HISTORY_SIZE = ANALYSIS_FPS * 2;
+        let srcMat = null, grayMat = null;
 
-        navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, frameRate: 30 } })
+        const OPTICAL_CONFIG = {
+            // 紅色 LED 定位
+            MIN_RED: 70,            // 像素R值至少要多少才考慮
+            RED_DOMINANCE: 1.35,    // R 必須超過 G/B 的這個倍數，才算「真的偏紅」
+            ROI_MIN_SIZE: 12,
+            ROI_SIZE: 42,           // 追蹤到中心點後，取樣的正方形區域邊長（像素）
+
+            // 2Hz 光學喚醒判定（嚴格版：需確認真正的週期性閃爍，不是單純看到紅色）
+            MIN_AMPLITUDE: 18,
+            REQUIRED_FULL_CYCLES: 2,     // 至少要看到 2 個完整 ON/OFF 週期才算數
+            MIN_HALF_PERIOD_MS: 150,
+            MAX_HALF_PERIOD_MS: 350,     // 2Hz 半週期約250ms，抓合理範圍
+            MIN_FULL_PERIOD_MS: 400,
+            MAX_FULL_PERIOD_MS: 600,     // 2Hz 全週期約500ms
+            MIN_STATE_DWELL_MS: 100,     // 高/低狀態至少要停留這麼久才算穩定，濾掉單張雜訊
+
+            HISTORY_MS: 2200,
+            DEBUG_INTERVAL_MS: 250
+        };
+
+        const opticalHistory = [];
+        let ledRoi = null;
+        let lastLedCenter = null;
+        let lastOpticalDebugTime = 0;
+        let opticalTriggerLatchedUntil = 0;
+
+        navigator.mediaDevices.getUserMedia({
+            video: {
+                width: { ideal: 640 },
+                height: { ideal: 480 },
+                frameRate: { ideal: ANALYSIS_FPS, min: 30 }
+            }
+        })
             .then(stream => {
                 video.srcObject = stream;
                 // [修正] 等 metadata 載入後才拿得到真正的 videoWidth/videoHeight，
@@ -262,9 +295,87 @@
             videoCapture = new cv.VideoCapture(video);
             srcMat = new cv.Mat(video.height, video.width, cv.CV_8UC4);
             grayMat = new cv.Mat(video.height, video.width, cv.CV_8UC1);
-            rChannelMat = new cv.Mat(video.height, video.width, cv.CV_8UC1); // [新增] 獨立的R色版Mat，供LED定位用
 
             setInterval(processVideoFrame, 1000 / ANALYSIS_FPS);
+        }
+
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        // 全畫面掃描（每2像素取樣一次以加快速度），找出「加權紅色重心」。
+        // 用平方加權讓訊號強的像素主導結果，對小亮點更穩定。
+        function findRedLedCenter() {
+            const width = srcMat.cols;
+            const height = srcMat.rows;
+            const data = srcMat.data;
+            const step = 2;
+            let weightSum = 0, xSum = 0, ySum = 0, strongest = 0;
+
+            for (let y = 0; y < height; y += step) {
+                for (let x = 0; x < width; x += step) {
+                    const idx = (y * width + x) * 4;
+                    const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+
+                    const redExcess = r - Math.max(g * OPTICAL_CONFIG.RED_DOMINANCE, b * OPTICAL_CONFIG.RED_DOMINANCE);
+                    if (r >= OPTICAL_CONFIG.MIN_RED && redExcess > 8) {
+                        const weight = redExcess * redExcess;
+                        weightSum += weight;
+                        xSum += x * weight;
+                        ySum += y * weight;
+                        if (redExcess > strongest) strongest = redExcess;
+                    }
+                }
+            }
+
+            if (weightSum < 1 || strongest < 10) return null; // 這一幀沒找到夠格的紅色訊號
+            return { x: xSum / weightSum, y: ySum / weightSum };
+        }
+
+        // LED 亮起時才更新追蹤座標；LED 熄滅(bit=0)的瞬間 findRedLedCenter 會回傳 null，
+        // 這裡就直接沿用上一個已知位置，不會被雜訊拉走。
+        function updateLedRoi(center) {
+            if (!center) return;
+            const width = srcMat.cols, height = srcMat.rows;
+            const size = Math.max(OPTICAL_CONFIG.ROI_MIN_SIZE, OPTICAL_CONFIG.ROI_SIZE);
+
+            const x = Math.round(center.x - size / 2);
+            const y = Math.round(center.y - size / 2);
+            const w = Math.min(size, width);
+            const h = Math.min(size, height);
+
+            ledRoi = {
+                x: clamp(x, 0, Math.max(0, width - w)),
+                y: clamp(y, 0, Math.max(0, height - h)),
+                w, h
+            };
+            lastLedCenter = center;
+        }
+
+        // 只在鎖定的小範圍內取 R/G/B 平均值（而非整張畫面），訊號不會被背景稀釋
+        function sampleRedRoi() {
+            if (!ledRoi) return null;
+            const data = srcMat.data;
+            const width = srcMat.cols;
+            const { x, y, w, h } = ledRoi;
+            let sumR = 0, sumG = 0, sumB = 0, count = 0;
+
+            for (let yy = y; yy < y + h; yy += 2) {
+                for (let xx = x; xx < x + w; xx += 2) {
+                    const idx = (yy * width + xx) * 4;
+                    sumR += data[idx]; sumG += data[idx + 1]; sumB += data[idx + 2];
+                    count++;
+                }
+            }
+            if (!count) return null;
+            return { r: sumR / count, g: sumG / count, b: sumB / count };
+        }
+
+        function pushOpticalSample(value, now) {
+            opticalHistory.push({ t: now, v: value });
+            while (opticalHistory.length && now - opticalHistory[0].t > OPTICAL_CONFIG.HISTORY_MS) {
+                opticalHistory.shift();
+            }
         }
 
         function processVideoFrame() {
@@ -276,86 +387,144 @@
                 videoCapture.read(srcMat);
                 cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
 
-                let mean = cv.mean(grayMat);
                 const now = Date.now();
-                brightnessHistory.push({ t: now, v: mean[0] });
-                if (brightnessHistory.length > HISTORY_SIZE) brightnessHistory.shift();
 
-                // [修正] 原本用 cv.mean(srcMat) 對整張畫面取平均，LED 距離一拉遠、
-                // 在畫面裡佔比變小，訊號會被其他背景像素稀釋到測不到。
-                // 改成：先定位「畫面中紅色最亮的點」，只取它附近一小塊區域的平均亮度，
-                // 這樣訊號強度不會因為 LED 在畫面裡變小而被稀釋。
-                cv.extractChannel(srcMat, rChannelMat, 0); // 取出R色版（RGBA的channel 0）
-                const redSample = sampleLedRegion(rChannelMat);
+                // 定位 LED（亮起時重新定位，熄滅時沿用上一個位置），只取局部區域訊號
+                const redCenter = findRedLedCenter();
+                if (redCenter) updateLedRoi(redCenter);
 
-                // 若使用者已啟動 HASH 比對監聽，把這一幀 LED 區域的紅色亮度丟給 HASH 解調器
-                handleHashSample(redSample, now);
+                const roiSample = sampleRedRoi();
+                if (roiSample) {
+                    // 紅色優勢訊號：R 減掉半份 G+B。真的是紅光時數值會明顯偏高，
+                    // 就算是很亮的白光，這個值也會接近 0，不會被誤判成訊號。
+                    const redSignal = roiSample.r - 0.5 * (roiSample.g + roiSample.b);
+                    pushOpticalSample(redSignal, now);
+                    handleHashSample(redSignal, now);
+                }
 
-                // 1. 檢測 2Hz 閃爍 (光學喚醒)
+                // 1. 檢測 2Hz 閃爍 (光學喚醒)：需嚴格確認至少2個完整週期，不是看到紅色就算
                 if (detect2HzFlicker()) {
-                    handleOpticalTrigger();
-                } else {
-                    // 如果未偵測到，取消 2Hz 打勾 (除非麥克風開啟中)
-                    if (!isVoicListenerActive) {
-                        setCheckStatus(chkOptical, false);
+                    if (now >= opticalTriggerLatchedUntil) {
+                        opticalTriggerLatchedUntil = now + 2000; // 短暫鎖定，避免同一段閃爍重複觸發
+                        handleOpticalTrigger();
                     }
+                } else if (!isVoicListenerActive && now >= opticalTriggerLatchedUntil) {
+                    setCheckStatus(chkOptical, false);
                 }
             } catch (e) {
                 console.error("Frame 分析失敗:", e);
             }
         }
 
-        // [新增] LED 定位追蹤：全畫面找紅色最亮點，鎖定位置後只取該點附近小區域的平均亮度，
-        // 讓訊號強度不受「LED 在畫面中佔比大小(也就是距離遠近)」影響。
-        let trackedLedX = null, trackedLedY = null;
-        const LED_MIN_BRIGHTNESS = 90; // 亮度低於這個值不更新追蹤位置，避免雜訊亂跳（依現場測試調整）
-        const LED_ROI_HALF = 8;        // 取樣區域半徑（像素），區域平均比單一像素抗雜訊
-
-        function sampleLedRegion(rMat) {
-            const result = cv.minMaxLoc(rMat); // 全畫面找最亮點位置與亮度值
-            if (result.maxVal >= LED_MIN_BRIGHTNESS) {
-                // 只有夠亮才更新追蹤座標；LED 熄滅(bit=0)的瞬間不會被雜訊拉走位置
-                trackedLedX = result.maxLoc.x;
-                trackedLedY = result.maxLoc.y;
-            }
-            if (trackedLedX === null) return 0; // 還沒鎖定到任何位置，先回傳0（尚無有效樣本）
-
-            const x0 = Math.max(0, trackedLedX - LED_ROI_HALF);
-            const y0 = Math.max(0, trackedLedY - LED_ROI_HALF);
-            const w = Math.min(LED_ROI_HALF * 2, rMat.cols - x0);
-            const h = Math.min(LED_ROI_HALF * 2, rMat.rows - y0);
-            const roi = rMat.roi(new cv.Rect(x0, y0, w, h));
-            const roiMean = cv.mean(roi)[0];
-            roi.delete(); // OpenCV.js 的 Mat 需要手動釋放，避免記憶體洩漏
-            return roiMean;
-        }
-
+        // =========================================================
+        // 嚴格 2Hz 光學喚醒判定
+        // 「看到紅色」不等於「光學喚醒」，必須同時滿足：
+        //   1. 訊號有明顯高低差(amplitude)
+        //   2. 確實在 HIGH/LOW 之間交替切換(用 hysteresis 濾掉臨界值抖動)
+        //   3. 每個半週期落在 150~350ms 範圍（2Hz 理論值約250ms）
+        //   4. 完整週期落在 400~600ms 範圍（2Hz 理論值約500ms）
+        //   5. 至少完成 2 個完整 ON/OFF 週期
+        // 因此「固定亮紅燈」或單純的雜訊閃爍都不會誤觸發。
+        // =========================================================
         function detect2HzFlicker() {
-            if (brightnessHistory.length < HISTORY_SIZE) return false;
-            let crossings = 0;
-            const sum = brightnessHistory.reduce((a, b) => a + b.v, 0);
-            const avg = sum / brightnessHistory.length;
+            if (opticalHistory.length < 60) return false;
 
-            for (let i = 1; i < brightnessHistory.length; i++) {
-                if ((brightnessHistory[i-1].v < avg && brightnessHistory[i].v >= avg) ||
-                    (brightnessHistory[i-1].v > avg && brightnessHistory[i].v <= avg)) {
-                    crossings++;
+            const values = opticalHistory.map(s => s.v);
+            const sorted = [...values].sort((a, b) => a - b);
+            // 用15%/85%百分位數估計LOW/HIGH，避免單一雜訊尖峰拉歪門檻
+            const low = sorted[Math.floor(sorted.length * 0.15)];
+            const high = sorted[Math.floor(sorted.length * 0.85)];
+            const amplitude = high - low;
+
+            if (amplitude < OPTICAL_CONFIG.MIN_AMPLITUDE) {
+                updateOpticalDebug(false, amplitude, 0, "LOW AMP");
+                return false;
+            }
+
+            const hysteresis = Math.max(4, amplitude * 0.15);
+            const highThreshold = low + amplitude * 0.65;
+            const lowThreshold = low + amplitude * 0.35;
+
+            let state = null, stateStartTime = null;
+            const transitions = [];
+
+            for (let i = 0; i < opticalHistory.length; i++) {
+                const sample = opticalHistory[i];
+                if (state === null) {
+                    if (sample.v >= highThreshold + hysteresis) { state = 1; stateStartTime = sample.t; }
+                    else if (sample.v <= lowThreshold - hysteresis) { state = 0; stateStartTime = sample.t; }
+                    continue;
+                }
+                if (state === 1 && sample.v <= lowThreshold) {
+                    const duration = sample.t - stateStartTime;
+                    if (duration >= OPTICAL_CONFIG.MIN_STATE_DWELL_MS) {
+                        transitions.push({ from: 1, to: 0, t: sample.t, duration });
+                        state = 0; stateStartTime = sample.t;
+                    }
+                } else if (state === 0 && sample.v >= highThreshold) {
+                    const duration = sample.t - stateStartTime;
+                    if (duration >= OPTICAL_CONFIG.MIN_STATE_DWELL_MS) {
+                        transitions.push({ from: 0, to: 1, t: sample.t, duration });
+                        state = 1; stateStartTime = sample.t;
+                    }
                 }
             }
 
-            if (crossings >= 6 && crossings <= 10) {
-                const maxB = Math.max(...brightnessHistory.map(h => h.v));
-                const minB = Math.min(...brightnessHistory.map(h => h.v));
-                if (maxB - minB > 30) return true;
+            if (transitions.length < 4) {
+                updateOpticalDebug(false, amplitude, transitions.length, "WAIT 2 CYCLES");
+                return false;
             }
-            return false;
+
+            // 確認 crossing 真的是交替(0->1->0->1)，不是同方向重複
+            const alternating = [];
+            for (let i = 1; i < transitions.length; i++) {
+                if (transitions[i].from === transitions[i - 1].to && transitions[i].to !== transitions[i - 1].to) {
+                    alternating.push(transitions[i]);
+                }
+            }
+            if (alternating.length < 4) {
+                updateOpticalDebug(false, amplitude, alternating.length, "NOT ALTERNATING");
+                return false;
+            }
+
+            const edges = transitions.slice(-5);
+            if (edges.length < 4) return false;
+
+            let validHalfPeriods = 0;
+            for (let i = 1; i < edges.length; i++) {
+                const dt = edges[i].t - edges[i - 1].t;
+                if (dt >= OPTICAL_CONFIG.MIN_HALF_PERIOD_MS && dt <= OPTICAL_CONFIG.MAX_HALF_PERIOD_MS) validHalfPeriods++;
+            }
+            if (validHalfPeriods < 4) {
+                updateOpticalDebug(false, amplitude, validHalfPeriods, "BAD HALF PERIOD");
+                return false;
+            }
+
+            let validFullPeriods = 0;
+            for (let i = 2; i < edges.length; i++) {
+                const dt = edges[i].t - edges[i - 2].t;
+                if (dt >= OPTICAL_CONFIG.MIN_FULL_PERIOD_MS && dt <= OPTICAL_CONFIG.MAX_FULL_PERIOD_MS) validFullPeriods++;
+            }
+
+            const detected = validFullPeriods >= OPTICAL_CONFIG.REQUIRED_FULL_CYCLES &&
+                              validHalfPeriods >= 4 && amplitude >= OPTICAL_CONFIG.MIN_AMPLITUDE;
+
+            updateOpticalDebug(detected, amplitude, validFullPeriods, detected ? "2Hz CONFIRMED" : "VERIFY");
+            return detected;
+        }
+
+        function updateOpticalDebug(detected, amplitude, cycles, reason) {
+            const now = Date.now();
+            if (now - lastOpticalDebugTime < OPTICAL_CONFIG.DEBUG_INTERVAL_MS) return;
+            lastOpticalDebugTime = now;
+
+            const latest = opticalHistory.length ? opticalHistory[opticalHistory.length - 1].v : 0;
+            analysisOverlay.innerText = `Optical: ${detected ? "2Hz CONFIRMED" : "SCAN"} | R=${latest.toFixed(0)} A=${amplitude.toFixed(0)} C=${cycles} ${reason}`;
+            analysisOverlay.style.color = detected ? "#ff0" : "#fff";
         }
 
         // 當光學喚醒成功 (偵測到 2Hz 閃爍)
         function handleOpticalTrigger() {
-            analysisOverlay.innerText = "Optical: DETECTED 2Hz";
-            analysisOverlay.style.color = "#ff0";
-
             // 項目 1 打勾：光學喚醒 2Hz
             setCheckStatus(chkOptical, true);
 
@@ -412,30 +581,32 @@
         let decodedBitStream = [];         // 已解出的 bit（滑動視窗，長度上限 HASH_TOTAL_BITS）
 
         // 每一幀呼叫一次：只有在 isHashListening 時才會實際處理
-        function handleHashSample(meanBrightness, now) {
+        function handleHashSample(signal, now) {
             if (!isHashListening) return;
 
             // 動態基準線：緩慢跟隨環境光平均亮度，避免長時間監聽時因環境光變化誤判
-            if (hashBaseline === null) hashBaseline = meanBrightness;
-            hashBaseline = hashBaseline * (1 - BASELINE_ALPHA) + meanBrightness * BASELINE_ALPHA;
+            if (hashBaseline === null) hashBaseline = signal;
+            hashBaseline = hashBaseline * (1 - BASELINE_ALPHA) + signal * BASELINE_ALPHA;
 
             const bitLevel =
-                meanBrightness > hashBaseline + HASH_CONFIG.THRESHOLD_MARGIN ? 1 :
-                meanBrightness < hashBaseline - HASH_CONFIG.THRESHOLD_MARGIN ? 0 :
+                signal > hashBaseline + HASH_CONFIG.THRESHOLD_MARGIN ? 1 :
+                signal < hashBaseline - HASH_CONFIG.THRESHOLD_MARGIN ? 0 :
                 null; // 落在基準線附近視為雜訊，不採計
 
             if (currentBitStartTime === 0) currentBitStartTime = now;
             if (bitLevel !== null) currentBitSamples.push(bitLevel);
 
-            // 一個 bit 週期結束時，用多數決判斷這個 bit 是 0 還是 1
-            if (now - currentBitStartTime >= HASH_CONFIG.BIT_DURATION_MS) {
+            // [修正] 原本用 if 判斷、每次都把 currentBitStartTime 重設為 now，
+            // 長時間監聽下容易累積時間漂移。改用 while + 固定步進累加，
+            // 就算某幾幀處理較慢，bit 邊界時間點也不會跟著漂掉。
+            while (now - currentBitStartTime >= HASH_CONFIG.BIT_DURATION_MS) {
                 if (currentBitSamples.length > 0) {
                     const ones = currentBitSamples.filter(b => b === 1).length;
-                    const bit = ones > currentBitSamples.length / 2 ? 1 : 0;
+                    const bit = ones >= currentBitSamples.length / 2 ? 1 : 0;
                     pushDecodedBit(bit);
                 }
                 currentBitSamples = [];
-                currentBitStartTime = now;
+                currentBitStartTime += HASH_CONFIG.BIT_DURATION_MS;
             }
 
             // 監聽逾時
@@ -461,10 +632,11 @@
 
             const payloadBits = decodedBitStream.slice(syncLen);
             const decodedHash = bitsToHex(payloadBits);
-            hashStatusEl.innerText = `狀態：偵測到訊號，解碼值 ${decodedHash}`;
 
             if (decodedHash === HASH_CONFIG.EXPECTED_HASH) {
                 onHashMatchSuccess(decodedHash);
+            } else {
+                hashStatusEl.innerText = `狀態：HASH 不符 ❌ (收到 ${decodedHash})`;
             }
             // 不論成功與否都清空緩衝，避免同一段訊號重複觸發判定
             decodedBitStream = [];
@@ -719,4 +891,4 @@
         });
     </script>
 </body>
-</html>＿
+</html>
