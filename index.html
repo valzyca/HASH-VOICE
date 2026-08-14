@@ -232,7 +232,7 @@
         // 可取到約 3 張/bit，多數決濾雜訊才可靠。（一般 2Hz 喚醒偵測用同一個幀率不受影響）
         const ANALYSIS_FPS = 30;
         let videoCapture = null;
-        let srcMat = null, grayMat = null;
+        let srcMat = null, grayMat = null, rChannelMat = null;
         const brightnessHistory = [];
         const HISTORY_SIZE = ANALYSIS_FPS * 2;
 
@@ -259,6 +259,7 @@
             videoCapture = new cv.VideoCapture(video);
             srcMat = new cv.Mat(video.height, video.width, cv.CV_8UC4);
             grayMat = new cv.Mat(video.height, video.width, cv.CV_8UC1);
+            rChannelMat = new cv.Mat(video.height, video.width, cv.CV_8UC1); // [新增] 獨立的R色版Mat，供LED定位用
 
             setInterval(processVideoFrame, 1000 / ANALYSIS_FPS);
         }
@@ -277,14 +278,15 @@
                 brightnessHistory.push({ t: now, v: mean[0] });
                 if (brightnessHistory.length > HISTORY_SIZE) brightnessHistory.shift();
 
-                // [修正] HASH 訊號韌體端是用「純紅光」調變，灰階平均會被 G/B 權重稀釋
-                // (灰階公式紅色只佔約0.299)，改直接讀 srcMat 的 R 色版，訊噪比更好。
-                // srcMat 是 VideoCapture 從 canvas 讀出的 RGBA，channel 0 = R。
-                const srcMean = cv.mean(srcMat);
-                const redMean = srcMean[0];
+                // [修正] 原本用 cv.mean(srcMat) 對整張畫面取平均，LED 距離一拉遠、
+                // 在畫面裡佔比變小，訊號會被其他背景像素稀釋到測不到。
+                // 改成：先定位「畫面中紅色最亮的點」，只取它附近一小塊區域的平均亮度，
+                // 這樣訊號強度不會因為 LED 在畫面裡變小而被稀釋。
+                cv.extractChannel(srcMat, rChannelMat, 0); // 取出R色版（RGBA的channel 0）
+                const redSample = sampleLedRegion(rChannelMat);
 
-                // 若使用者已啟動 HASH 比對監聽，把這一幀的紅色色版亮度丟給 HASH 解調器
-                handleHashSample(redMean, now);
+                // 若使用者已啟動 HASH 比對監聽，把這一幀 LED 區域的紅色亮度丟給 HASH 解調器
+                handleHashSample(redSample, now);
 
                 // 1. 檢測 2Hz 閃爍 (光學喚醒)
                 if (detect2HzFlicker()) {
@@ -298,6 +300,31 @@
             } catch (e) {
                 console.error("Frame 分析失敗:", e);
             }
+        }
+
+        // [新增] LED 定位追蹤：全畫面找紅色最亮點，鎖定位置後只取該點附近小區域的平均亮度，
+        // 讓訊號強度不受「LED 在畫面中佔比大小(也就是距離遠近)」影響。
+        let trackedLedX = null, trackedLedY = null;
+        const LED_MIN_BRIGHTNESS = 90; // 亮度低於這個值不更新追蹤位置，避免雜訊亂跳（依現場測試調整）
+        const LED_ROI_HALF = 8;        // 取樣區域半徑（像素），區域平均比單一像素抗雜訊
+
+        function sampleLedRegion(rMat) {
+            const result = cv.minMaxLoc(rMat); // 全畫面找最亮點位置與亮度值
+            if (result.maxVal >= LED_MIN_BRIGHTNESS) {
+                // 只有夠亮才更新追蹤座標；LED 熄滅(bit=0)的瞬間不會被雜訊拉走位置
+                trackedLedX = result.maxLoc.x;
+                trackedLedY = result.maxLoc.y;
+            }
+            if (trackedLedX === null) return 0; // 還沒鎖定到任何位置，先回傳0（尚無有效樣本）
+
+            const x0 = Math.max(0, trackedLedX - LED_ROI_HALF);
+            const y0 = Math.max(0, trackedLedY - LED_ROI_HALF);
+            const w = Math.min(LED_ROI_HALF * 2, rMat.cols - x0);
+            const h = Math.min(LED_ROI_HALF * 2, rMat.rows - y0);
+            const roi = rMat.roi(new cv.Rect(x0, y0, w, h));
+            const roiMean = cv.mean(roi)[0];
+            roi.delete(); // OpenCV.js 的 Mat 需要手動釋放，避免記憶體洩漏
+            return roiMean;
         }
 
         function detect2HzFlicker() {
@@ -368,7 +395,7 @@
             PAYLOAD_BITS: 24,                  // 3 bytes 短碼 = 24 bits
             EXPECTED_HASH: "3F1C4A",           // 對應韌體 HASH_CODE_BYTES {0x3F,0x1C,0x4A}
             LISTEN_TIMEOUT_MS: 15000,          // 監聽逾時：前導(0.6s)+資料(2.4s)=3s，留餘裕給使用者觸發手勢
-            THRESHOLD_MARGIN: 30               // 紅色色版是滿幅0↔255切換，訊噪比佳，可用較高門檻抗雜訊
+            THRESHOLD_MARGIN: 20                // 局部區域取樣訊噪比佳，但遠距離時LED本身較暗，適度調低門檻增加靈敏度
         };
         const HASH_TOTAL_BITS = HASH_CONFIG.SYNC_PATTERN.length + HASH_CONFIG.PAYLOAD_BITS;
 
