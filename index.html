@@ -38,7 +38,7 @@
 
         /* Webcam 視訊預覽 (右下角) */
         .video-container {
-            position: absolute; width: 280px; height: 210px;
+            position: absolute; width: 240px; height: 180px;
             bottom: 20px; right: 20px; border-radius: 12px; z-index: 20;
             box-shadow: 0 0 20px rgba(129, 216, 208, 0.6); overflow: hidden;
             border: 2px solid #333;
@@ -158,7 +158,7 @@
 
         <!-- 真正的 HASH 光學偵測比對開關 -->
         <button id="hash-btn" class="btn-sim" onclick="toggleHashDetection()">🔓 啟動 HASH 比對</button>
-        <div id="hash-status">狀態：待機</div><div style="font-size:10px;color:#777;margin-top:4px">Optical: Red ROI / 2Hz　HASH: 50ms/bit</div>
+        <div id="hash-status">狀態：待機</div>
     </div>
 
     <div id="cv-status">OpenCV.js loading...</div>
@@ -227,59 +227,16 @@
         // =========================================================================
         // C. 光學喚醒 (2Hz) 與 HASH 光通訊解調
         // =========================================================================
-        // [修正] 韌體 HASH 位元時長統一為 50ms/bit，30fps(每張66ms)只能取到約1.5張/bit，
+        // [修正] 韌體 HASH 位元時長已改為 100ms/bit，15fps(每張66ms)只能取到約1.5張/bit，
         // 多數決容易被單張雜訊帶偏；拉高到 30fps(與 getUserMedia 要求的 frameRate 一致)，
         // 可取到約 3 張/bit，多數決濾雜訊才可靠。（一般 2Hz 喚醒偵測用同一個幀率不受影響）
-        const ANALYSIS_FPS = 60;
+        const ANALYSIS_FPS = 30;
         let videoCapture = null;
         let srcMat = null, grayMat = null;
+        const brightnessHistory = [];
+        const HISTORY_SIZE = ANALYSIS_FPS * 2;
 
-        // 光學喚醒不再分析整張畫面，而是追蹤紅色 LED 的 ROI。
-        // 這可避免 LED 距離拉遠後，被大面積背景平均值稀釋。
-        const OPTICAL_CONFIG = {
-            // 紅色 LED ROI 搜尋
-            MIN_RED: 70,
-            RED_DOMINANCE: 1.35,
-            ROI_MIN_SIZE: 12,
-            ROI_SIZE: 42,
-
-            // 2Hz 光學喚醒判定
-            // 2Hz = 500ms/完整週期 = 約250ms/半週期
-            MIN_AMPLITUDE: 18,
-
-            // 必須至少完成 2 個完整的 ON/OFF 週期
-            REQUIRED_FULL_CYCLES: 2,
-
-            // 每個半週期允許的時間範圍
-            // 太短通常是攝影機雜訊，太長則不是 2Hz。
-            MIN_HALF_PERIOD_MS: 150,
-            MAX_HALF_PERIOD_MS: 350,
-
-            // 完整週期約 500ms
-            MIN_FULL_PERIOD_MS: 400,
-            MAX_FULL_PERIOD_MS: 600,
-
-            // 高低狀態必須有足夠的停留時間
-            MIN_STATE_DWELL_MS: 100,
-
-            HISTORY_MS: 2200,
-            DEBUG_INTERVAL_MS: 250
-        };
-
-        const opticalHistory = [];
-        let ledRoi = null;
-        let lastLedCenter = null;
-        let lastOpticalDebugTime = 0;
-        let opticalTriggerLatchedUntil = 0;
-        const HISTORY_SIZE = Math.ceil(ANALYSIS_FPS * 2.2);
-
-        navigator.mediaDevices.getUserMedia({
-            video: {
-                width: { ideal: 640 },
-                height: { ideal: 480 },
-                frameRate: { ideal: ANALYSIS_FPS, min: 30 }
-            }
-        })
+        navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, frameRate: 30 } })
             .then(stream => {
                 video.srcObject = stream;
                 // [修正] 等 metadata 載入後才拿得到真正的 videoWidth/videoHeight，
@@ -306,506 +263,62 @@
             setInterval(processVideoFrame, 1000 / ANALYSIS_FPS);
         }
 
-        function clamp(value, min, max) {
-            return Math.max(min, Math.min(max, value));
-        }
-
-        // 尋找畫面中最可能的紅色 LED。採加權中心而非單一像素，
-        // 對遠距離 LED 的小亮點更穩定。
-        function findRedLedCenter() {
-            const width = srcMat.cols;
-            const height = srcMat.rows;
-            const data = srcMat.data;
-            const step = 2;
-            let weightSum = 0;
-            let xSum = 0;
-            let ySum = 0;
-            let strongest = 0;
-
-            for (let y = 0; y < height; y += step) {
-                for (let x = 0; x < width; x += step) {
-                    const idx = (y * width + x) * 4;
-                    const r = data[idx];
-                    const g = data[idx + 1];
-                    const b = data[idx + 2];
-
-                    const redExcess = r - Math.max(g * OPTICAL_CONFIG.RED_DOMINANCE, b * OPTICAL_CONFIG.RED_DOMINANCE);
-                    if (r >= OPTICAL_CONFIG.MIN_RED && redExcess > 8) {
-                        const weight = redExcess * redExcess;
-                        weightSum += weight;
-                        xSum += x * weight;
-                        ySum += y * weight;
-                        if (redExcess > strongest) strongest = redExcess;
-                    }
-                }
-            }
-
-            if (weightSum < 1 || strongest < 10) return null;
-            return { x: xSum / weightSum, y: ySum / weightSum };
-        }
-
-        function updateLedRoi(center) {
-            const width = srcMat.cols;
-            const height = srcMat.rows;
-            const size = Math.max(OPTICAL_CONFIG.ROI_MIN_SIZE, OPTICAL_CONFIG.ROI_SIZE);
-
-            if (!center) return;
-
-            // 遠距離時讓 ROI 稍大，避免 LED 只有幾個 pixel 時取樣不穩。
-            const x = Math.round(center.x - size / 2);
-            const y = Math.round(center.y - size / 2);
-            const w = Math.min(size, width);
-            const h = Math.min(size, height);
-
-            ledRoi = {
-                x: clamp(x, 0, Math.max(0, width - w)),
-                y: clamp(y, 0, Math.max(0, height - h)),
-                w,
-                h
-            };
-            lastLedCenter = center;
-        }
-
-        function sampleRedRoi() {
-            if (!ledRoi) return null;
-
-            const data = srcMat.data;
-            const width = srcMat.cols;
-            const { x, y, w, h } = ledRoi;
-            let sumR = 0;
-            let sumG = 0;
-            let sumB = 0;
-            let count = 0;
-
-            for (let yy = y; yy < y + h; yy += 2) {
-                for (let xx = x; xx < x + w; xx += 2) {
-                    const idx = (yy * width + xx) * 4;
-                    sumR += data[idx];
-                    sumG += data[idx + 1];
-                    sumB += data[idx + 2];
-                    count++;
-                }
-            }
-
-            if (!count) return null;
-            return {
-                r: sumR / count,
-                g: sumG / count,
-                b: sumB / count
-            };
-        }
-
-        function pushOpticalSample(value, now) {
-            opticalHistory.push({ t: now, v: value });
-            while (opticalHistory.length && now - opticalHistory[0].t > OPTICAL_CONFIG.HISTORY_MS) {
-                opticalHistory.shift();
-            }
-            if (opticalHistory.length > HISTORY_SIZE) opticalHistory.shift();
-        }
-
-        // =========================================================
-        // 嚴格 2Hz 光學喚醒判定
-        //
-        // 重要：
-        // 「看到紅色」不等於「光學喚醒」。
-        //
-        // 必須同時滿足：
-        //   1. LED ROI 的紅色訊號有明顯高低差
-        //   2. 訊號確實在 HIGH / LOW 之間來回切換
-        //   3. 每個半週期約 250ms
-        //   4. 完整週期約 500ms，也就是 2Hz
-        //   5. 至少完成 2 個完整 ON/OFF 週期
-        //
-        // 因此「固定亮紅燈」不會觸發。
-        // =========================================================
-        function detect2HzFlicker() {
-
-            if (opticalHistory.length < 60) {
-                return false;
-            }
-
-            const now = Date.now();
-
-            const values =
-                opticalHistory.map(s => s.v);
-
-            // 用百分位數估計 LOW / HIGH，避免單一雜訊尖峰影響門檻
-            const sorted =
-                [...values].sort((a, b) => a - b);
-
-            const low =
-                sorted[Math.floor(sorted.length * 0.15)];
-
-            const high =
-                sorted[Math.floor(sorted.length * 0.85)];
-
-            const amplitude =
-                high - low;
-
-            // 紅色訊號變化太小，直接視為沒有脈衝
-            if (
-                amplitude <
-                OPTICAL_CONFIG.MIN_AMPLITUDE
-            ) {
-                updateOpticalDebug(
-                    false,
-                    amplitude,
-                    0,
-                    "LOW AMP"
-                );
-                return false;
-            }
-
-            // 使用 hysteresis，避免訊號在中間門檻附近抖動造成假 crossing
-            const hysteresis =
-                Math.max(4, amplitude * 0.15);
-
-            const highThreshold =
-                low + amplitude * 0.65;
-
-            const lowThreshold =
-                low + amplitude * 0.35;
-
-            let state = null;
-            let stateStartTime = null;
-            let transitions = [];
-
-            // 先找一個真正穩定的 HIGH 或 LOW 狀態
-            for (
-                let i = 0;
-                i < opticalHistory.length;
-                i++
-            ) {
-
-                const sample =
-                    opticalHistory[i];
-
-                if (
-                    state === null
-                ) {
-
-                    if (
-                        sample.v >=
-                        highThreshold + hysteresis
-                    ) {
-
-                        state = 1;
-                        stateStartTime =
-                            sample.t;
-
-                    } else if (
-                        sample.v <=
-                        lowThreshold - hysteresis
-                    ) {
-
-                        state = 0;
-                        stateStartTime =
-                            sample.t;
-                    }
-
-                    continue;
-                }
-
-                // HIGH -> LOW
-                if (
-                    state === 1 &&
-                    sample.v <=
-                    lowThreshold
-                ) {
-
-                    const duration =
-                        sample.t -
-                        stateStartTime;
-
-                    if (
-                        duration >=
-                        OPTICAL_CONFIG.MIN_STATE_DWELL_MS
-                    ) {
-
-                        transitions.push({
-                            from: 1,
-                            to: 0,
-                            t: sample.t,
-                            duration
-                        });
-
-                        state = 0;
-                        stateStartTime =
-                            sample.t;
-                    }
-
-                // LOW -> HIGH
-                } else if (
-                    state === 0 &&
-                    sample.v >=
-                    highThreshold
-                ) {
-
-                    const duration =
-                        sample.t -
-                        stateStartTime;
-
-                    if (
-                        duration >=
-                        OPTICAL_CONFIG.MIN_STATE_DWELL_MS
-                    ) {
-
-                        transitions.push({
-                            from: 0,
-                            to: 1,
-                            t: sample.t,
-                            duration
-                        });
-
-                        state = 1;
-                        stateStartTime =
-                            sample.t;
-                    }
-                }
-            }
-
-            if (
-                transitions.length < 4
-            ) {
-
-                updateOpticalDebug(
-                    false,
-                    amplitude,
-                    transitions.length,
-                    "WAIT 2 CYCLES"
-                );
-
-                return false;
-            }
-
-            // 檢查 crossing 是否真的交替：
-            // 0->1->0->1->0 或 1->0->1->0->1
-            let alternatingTransitions = [];
-
-            for (
-                let i = 1;
-                i < transitions.length;
-                i++
-            ) {
-
-                if (
-                    transitions[i].from ===
-                    transitions[i - 1].to &&
-                    transitions[i].to !==
-                    transitions[i - 1].to
-                ) {
-
-                    alternatingTransitions.push(
-                        transitions[i]
-                    );
-                }
-            }
-
-            if (
-                alternatingTransitions.length < 4
-            ) {
-
-                updateOpticalDebug(
-                    false,
-                    amplitude,
-                    alternatingTransitions.length,
-                    "NOT ALTERNATING"
-                );
-
-                return false;
-            }
-
-            // 取最後 5 個邊界，檢查至少 4 個半週期。
-            // 4 個半週期 = 2 個完整 2Hz 週期。
-            const edges =
-                transitions.slice(-5);
-
-            if (
-                edges.length < 4
-            ) {
-
-                return false;
-            }
-
-            let validHalfPeriods = 0;
-
-            for (
-                let i = 1;
-                i < edges.length;
-                i++
-            ) {
-
-                const dt =
-                    edges[i].t -
-                    edges[i - 1].t;
-
-                if (
-                    dt >=
-                    OPTICAL_CONFIG.MIN_HALF_PERIOD_MS &&
-                    dt <=
-                    OPTICAL_CONFIG.MAX_HALF_PERIOD_MS
-                ) {
-
-                    validHalfPeriods++;
-                }
-            }
-
-            if (
-                validHalfPeriods < 4
-            ) {
-
-                updateOpticalDebug(
-                    false,
-                    amplitude,
-                    validHalfPeriods,
-                    "BAD HALF PERIOD"
-                );
-
-                return false;
-            }
-
-            // 檢查完整週期：
-            // 每隔兩個 crossing 應該約 500ms。
-            let validFullPeriods = 0;
-
-            for (
-                let i = 2;
-                i < edges.length;
-                i++
-            ) {
-
-                const dt =
-                    edges[i].t -
-                    edges[i - 2].t;
-
-                if (
-                    dt >=
-                    OPTICAL_CONFIG.MIN_FULL_PERIOD_MS &&
-                    dt <=
-                    OPTICAL_CONFIG.MAX_FULL_PERIOD_MS
-                ) {
-
-                    validFullPeriods++;
-                }
-            }
-
-            // 至少 2 個完整週期
-            // 用 4 個 crossing 間隔中的 2 個完整週期來確認。
-            const detected =
-                validFullPeriods >=
-                OPTICAL_CONFIG.REQUIRED_FULL_CYCLES &&
-                validHalfPeriods >= 4 &&
-                amplitude >=
-                OPTICAL_CONFIG.MIN_AMPLITUDE;
-
-            updateOpticalDebug(
-                detected,
-                amplitude,
-                validFullPeriods,
-                detected
-                    ? "2Hz CONFIRMED"
-                    : "VERIFY"
-            );
-
-            return detected;
-        }
-
-        function updateOpticalDebug(
-            detected,
-            amplitude,
-            cycles,
-            reason
-        ) {
-
-            const now = Date.now();
-
-            if (
-                now -
-                lastOpticalDebugTime <
-                OPTICAL_CONFIG.DEBUG_INTERVAL_MS
-            ) {
-                return;
-            }
-
-            lastOpticalDebugTime =
-                now;
-
-            const latest =
-                opticalHistory.length
-                    ? opticalHistory[
-                        opticalHistory.length - 1
-                    ].v
-                    : 0;
-
-            analysisOverlay.innerText =
-                `Optical: ${
-                    detected
-                        ? "2Hz CONFIRMED"
-                        : "SCAN"
-                } | R=${
-                    latest.toFixed(0)
-                } A=${
-                    amplitude.toFixed(0)
-                } C=${
-                    cycles
-                } ${reason}`;
-
-            analysisOverlay.style.color =
-                detected
-                    ? "#ff0"
-                    : "#fff";
-        }
-
         function processVideoFrame() {
             if (!isOpenCvReady || !isVideoReady || video.paused || video.ended) return;
 
+            // [修正] 加上 try/catch，避免單一 frame 讀取失敗時
+            // setInterval 每次都拋錯洗版 console、甚至中斷偵測。
             try {
                 videoCapture.read(srcMat);
                 cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
 
+                let mean = cv.mean(grayMat);
                 const now = Date.now();
+                brightnessHistory.push({ t: now, v: mean[0] });
+                if (brightnessHistory.length > HISTORY_SIZE) brightnessHistory.shift();
 
-                // LED 亮起時重新定位紅色中心；LED 熄滅時沿用上一個 ROI。
-                const redCenter = findRedLedCenter();
-                if (redCenter) updateLedRoi(redCenter);
+                // [修正] HASH 訊號韌體端是用「純紅光」調變，灰階平均會被 G/B 權重稀釋
+                // (灰階公式紅色只佔約0.299)，改直接讀 srcMat 的 R 色版，訊噪比更好。
+                // srcMat 是 VideoCapture 從 canvas 讀出的 RGBA，channel 0 = R。
+                const srcMean = cv.mean(srcMat);
+                const redMean = srcMean[0];
 
-                const roiSample = sampleRedRoi();
-                if (roiSample) {
-                    // 主要使用紅色通道，同時加入紅色優勢度，降低環境白光造成的誤觸發。
-                    const redSignal = roiSample.r - 0.5 * (roiSample.g + roiSample.b);
-                    pushOpticalSample(redSignal, now);
-                    handleHashSample(redSignal, now);
-                }
+                // 若使用者已啟動 HASH 比對監聽，把這一幀的紅色色版亮度丟給 HASH 解調器
+                handleHashSample(redMean, now);
 
-                // 只有 detect2HzFlicker() 完整確認：
-                // 至少 2 個完整的 2Hz ON/OFF 週期，
-                // 才允許進入光學喚醒。
+                // 1. 檢測 2Hz 閃爍 (光學喚醒)
                 if (detect2HzFlicker()) {
-
-                    if (
-                        now >=
-                        opticalTriggerLatchedUntil
-                    ) {
-
-                        opticalTriggerLatchedUntil =
-                            now + 2000;
-
-                        handleOpticalTrigger();
+                    handleOpticalTrigger();
+                } else {
+                    // 如果未偵測到，取消 2Hz 打勾 (除非麥克風開啟中)
+                    if (!isVoicListenerActive) {
+                        setCheckStatus(chkOptical, false);
                     }
-
-                } else if (
-                    !isVoicListenerActive &&
-                    now >= opticalTriggerLatchedUntil
-                ) {
-
-                    setCheckStatus(
-                        chkOptical,
-                        false
-                    );
                 }
             } catch (e) {
-                console.error('Frame 分析失敗:', e);
+                console.error("Frame 分析失敗:", e);
             }
+        }
+
+        function detect2HzFlicker() {
+            if (brightnessHistory.length < HISTORY_SIZE) return false;
+            let crossings = 0;
+            const sum = brightnessHistory.reduce((a, b) => a + b.v, 0);
+            const avg = sum / brightnessHistory.length;
+
+            for (let i = 1; i < brightnessHistory.length; i++) {
+                if ((brightnessHistory[i-1].v < avg && brightnessHistory[i].v >= avg) ||
+                    (brightnessHistory[i-1].v > avg && brightnessHistory[i].v <= avg)) {
+                    crossings++;
+                }
+            }
+
+            if (crossings >= 6 && crossings <= 10) {
+                const maxB = Math.max(...brightnessHistory.map(h => h.v));
+                const minB = Math.min(...brightnessHistory.map(h => h.v));
+                if (maxB - minB > 30) return true;
+            }
+            return false;
         }
 
         // 當光學喚醒成功 (偵測到 2Hz 閃爍)
@@ -844,53 +357,58 @@
         //
         // 已對照 firmware_double_longpress_hash.ino 實際規格調整：
         //   [ 6 個半週期的前導閃爍 SYNC_PATTERN，對應韌體「快速閃爍3次」 ]
-        //   + [ 128-bit 資料，對應韌體 16 個 ASCII 字元（每字元 8-bit，MSB-first）]
+        //   + [ 24-bit 資料，對應韌體 3 bytes 短碼（MSB-first）]
         // 韌體端前導脈衝與資料位元已統一使用 HASH_BIT_DURATION_MS(100ms) 同一個時脈，
-        // 網頁端用「滑動視窗」持續解出 bit，一旦視窗前段比對到同步碼，
-        // 就把後面 128 bit 依 8-bit 一組還原成 ASCII 字元，跟 EXPECTED_HASH 字串比對。
+        // 前導0.6秒 + 資料2.4秒 = 3.0秒整。網頁端用「滑動視窗」持續解出 bit，
+        // 一旦視窗前段比對到同步碼，就把後面 24 bit 依 8-bit 一組還原成 HEX 字串比對。
         // =========================================================================
         const HASH_CONFIG = {
-            BIT_DURATION_MS: 50,
-            HEADER_HALF_MS: 50,
-            HEADER_PULSES: 3,
-            SYNC_PATTERN: [1, 0, 1, 0, 1, 0],
-            PAYLOAD_BITS: 128,
-            EXPECTED_HASH: 'A1B2C3D4E5F67890',
-            LISTEN_TIMEOUT_MS: 10000,
-            THRESHOLD_MARGIN: 8,
-            BASELINE_ALPHA: 0.03
+            BIT_DURATION_MS: 100,              // 對應韌體 HASH_BIT_DURATION_MS，須保持一致
+            SYNC_PATTERN: [1, 0, 1, 0, 1, 0],  // 對應韌體「ON 40ms→OFF 40ms 共3次」的節奏(6個半週期)
+            PAYLOAD_BITS: 24,                  // 3 bytes 短碼 = 24 bits
+            EXPECTED_HASH: "3F1C4A",           // 對應韌體 HASH_CODE_BYTES {0x3F,0x1C,0x4A}
+            LISTEN_TIMEOUT_MS: 15000,          // 監聽逾時：前導(0.6s)+資料(2.4s)=3s，留餘裕給使用者觸發手勢
+            THRESHOLD_MARGIN: 30               // 紅色色版是滿幅0↔255切換，訊噪比佳，可用較高門檻抗雜訊
         };
         const HASH_TOTAL_BITS = HASH_CONFIG.SYNC_PATTERN.length + HASH_CONFIG.PAYLOAD_BITS;
 
         let isHashListening = false;
         let hashListenStartTime = 0;
-        let hashBaseline = null;
-        let currentBitSamples = [];
-        let currentBitStartTime = 0;
-        let decodedBitStream = [];
+        let hashBaseline = null;           // 動態基準亮度（跟隨環境光緩慢調整）
+        const BASELINE_ALPHA = 0.02;
 
-        function handleHashSample(signal, now) {
+        let currentBitSamples = [];        // 目前這個 bit 週期內收集到的原始樣本
+        let currentBitStartTime = 0;
+        let decodedBitStream = [];         // 已解出的 bit（滑動視窗，長度上限 HASH_TOTAL_BITS）
+
+        // 每一幀呼叫一次：只有在 isHashListening 時才會實際處理
+        function handleHashSample(meanBrightness, now) {
             if (!isHashListening) return;
 
-            if (hashBaseline === null) hashBaseline = signal;
-            hashBaseline = hashBaseline * (1 - HASH_CONFIG.BASELINE_ALPHA) + signal * HASH_CONFIG.BASELINE_ALPHA;
+            // 動態基準線：緩慢跟隨環境光平均亮度，避免長時間監聽時因環境光變化誤判
+            if (hashBaseline === null) hashBaseline = meanBrightness;
+            hashBaseline = hashBaseline * (1 - BASELINE_ALPHA) + meanBrightness * BASELINE_ALPHA;
 
-            const bitLevel = signal > hashBaseline + HASH_CONFIG.THRESHOLD_MARGIN ? 1 :
-                             signal < hashBaseline - HASH_CONFIG.THRESHOLD_MARGIN ? 0 : null;
+            const bitLevel =
+                meanBrightness > hashBaseline + HASH_CONFIG.THRESHOLD_MARGIN ? 1 :
+                meanBrightness < hashBaseline - HASH_CONFIG.THRESHOLD_MARGIN ? 0 :
+                null; // 落在基準線附近視為雜訊，不採計
 
             if (currentBitStartTime === 0) currentBitStartTime = now;
             if (bitLevel !== null) currentBitSamples.push(bitLevel);
 
-            while (now - currentBitStartTime >= HASH_CONFIG.BIT_DURATION_MS) {
+            // 一個 bit 週期結束時，用多數決判斷這個 bit 是 0 還是 1
+            if (now - currentBitStartTime >= HASH_CONFIG.BIT_DURATION_MS) {
                 if (currentBitSamples.length > 0) {
                     const ones = currentBitSamples.filter(b => b === 1).length;
-                    const bit = ones >= currentBitSamples.length / 2 ? 1 : 0;
+                    const bit = ones > currentBitSamples.length / 2 ? 1 : 0;
                     pushDecodedBit(bit);
                 }
                 currentBitSamples = [];
-                currentBitStartTime += HASH_CONFIG.BIT_DURATION_MS;
+                currentBitStartTime = now;
             }
 
+            // 監聽逾時
             if (now - hashListenStartTime > HASH_CONFIG.LISTEN_TIMEOUT_MS) {
                 stopHashListening('timeout');
             }
@@ -899,7 +417,6 @@
         function pushDecodedBit(bit) {
             decodedBitStream.push(bit);
             if (decodedBitStream.length > HASH_TOTAL_BITS) decodedBitStream.shift();
-
             if (decodedBitStream.length === HASH_TOTAL_BITS) {
                 tryMatchHash();
             }
@@ -910,34 +427,32 @@
             const candidateSync = decodedBitStream.slice(0, syncLen);
             const isSyncMatch = candidateSync.every((b, i) => b === HASH_CONFIG.SYNC_PATTERN[i]);
 
-            if (!isSyncMatch) return;
+            if (!isSyncMatch) return; // 同步碼沒對齊，繼續等下一個 bit 滑進視窗
 
             const payloadBits = decodedBitStream.slice(syncLen);
-            const decodedString = bitsToAscii(payloadBits);
-            hashStatusEl.innerText = `狀態：偵測到訊號，解碼值 ${decodedString}`;
+            const decodedHash = bitsToHex(payloadBits);
+            hashStatusEl.innerText = `狀態：偵測到訊號，解碼值 ${decodedHash}`;
 
-            if (decodedString === HASH_CONFIG.EXPECTED_HASH) {
-                onHashMatchSuccess(decodedString);
-            } else {
-                hashStatusEl.innerText = `狀態：HASH 不符 ❌ (${decodedString})`;
+            if (decodedHash === HASH_CONFIG.EXPECTED_HASH) {
+                onHashMatchSuccess(decodedHash);
             }
-
+            // 不論成功與否都清空緩衝，避免同一段訊號重複觸發判定
             decodedBitStream = [];
         }
 
-        function bitsToAscii(bits) {
-            let str = '';
+        // 8-bit 一組還原成 2 碼 HEX（對應韌體 MSB-first 的 byte 陣列短碼）
+        function bitsToHex(bits) {
+            let hex = '';
             for (let i = 0; i < bits.length; i += 8) {
                 const byteBits = bits.slice(i, i + 8);
-                if (byteBits.length < 8) break;
                 const value = byteBits.reduce((acc, b) => (acc << 1) | b, 0);
-                str += String.fromCharCode(value);
+                hex += value.toString(16).toUpperCase().padStart(2, '0');
             }
-            return str;
+            return hex;
         }
 
-        function onHashMatchSuccess(decodedString) {
-            hashStatusEl.innerText = `狀態：比對成功 ✅ (HASH=${decodedString})`;
+        function onHashMatchSuccess(decodedHash) {
+            hashStatusEl.innerText = `狀態：比對成功 ✅ (HASH=${decodedHash})`;
             triggerRedBreathing(); // 沿用原本效果：打勾項目2、紅色呼吸燈 5 秒後自動復原
             stopHashListening('success');
         }
@@ -960,7 +475,7 @@
 
             hashBtn.innerText = '⏹ 停止 HASH 偵測';
             hashBtn.classList.add('active');
-            hashStatusEl.innerText = '狀態：監聽中... 50ms/bit';
+            hashStatusEl.innerText = '狀態：監聽中...';
         }
 
         function stopHashListening(reason) {
@@ -1095,20 +610,46 @@
 
         const SPELL_DATABASE = {
             "asclepius": {
-                aliases: ["asclepius", "asclepios", "esclepius", "ask lepius", "ass clepius", "usclepius", "asklepios"],
+                aliases: [
+                    "asclepius", "asclepios", "asklepios", "esclepius", "esculapius",
+                    "aesculapius", "ask lepius", "asklepius", "ascalepius", "asclepious",
+                    "asclipius", "aclepius", "a sclepius", "az clepius", "ass clepius",
+                    "us clepius", "escalpius", "as clepius", "ash clepius"
+                ],
                 action: triggerAsclepiusEffect
             }
         };
 
+        let spellCooldownUntil = 0; // 觸發後短暫冷卻，避免同一句話被重複判定好幾次
+
         function evaluateSpellVoice(spokenText) {
-            const cleanInput = spokenText.trim().toLowerCase();
-            const SIMILARITY_THRESHOLD = 0.65;
+            if (Date.now() < spellCooldownUntil) return false;
+
+            // 去標點符號，只留英文字母與空白
+            const cleanInput = spokenText.trim().toLowerCase().replace(/[^a-z\s]/g, '');
+            if (!cleanInput) return false;
+
+            const words = cleanInput.split(/\s+/).filter(Boolean);
+
+            // 候選字串：逐字比對 + 相鄰兩字黏起來比對（抵銷辨識引擎斷詞位置不準的問題）
+            // + 整句去空格比對（涵蓋辨識剛好完整對上一個詞的情況）
+            const candidates = [...words];
+            for (let i = 0; i < words.length - 1; i++) {
+                candidates.push(words[i] + words[i + 1]);
+            }
+            candidates.push(words.join(''));
+
+            const SIMILARITY_THRESHOLD = 0.6;
+
             for (const [spellName, config] of Object.entries(SPELL_DATABASE)) {
-                const mainScore = getSimilarity(cleanInput, spellName);
-                if (mainScore >= SIMILARITY_THRESHOLD) { config.action(); return true; }
-                for (const alias of config.aliases) {
-                    if (cleanInput.includes(alias) || getSimilarity(cleanInput, alias) >= SIMILARITY_THRESHOLD) {
-                        config.action(); return true;
+                const allTargets = [spellName, ...config.aliases].map(t => t.replace(/\s+/g, ''));
+                for (const candidate of candidates) {
+                    for (const target of allTargets) {
+                        if (getSimilarity(candidate, target) >= SIMILARITY_THRESHOLD) {
+                            spellCooldownUntil = Date.now() + 4000;
+                            config.action();
+                            return true;
+                        }
                     }
                 }
             }
@@ -1120,7 +661,7 @@
         if ('webkitSpeechRecognition' in window) {
             recognition = new webkitSpeechRecognition();
             recognition.continuous = true;
-            recognition.interimResults = false;
+            recognition.interimResults = true; // [修正] 開啟即時中間結果，邊聽邊比對，增加咒語比對成功的機會
             recognition.lang = 'en-US';
 
             recognition.onresult = (event) => {
